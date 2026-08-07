@@ -65,14 +65,20 @@ export function buildTerrainContours(
   for (let i = 0; i < levelCount; i++) {
     const tolerance = i === 0 ? OUTER_TOLERANCE : INNER_TOLERANCE;
     const polygons = tracePolygons(field, i * STEP_TILES, tolerance);
-    // Unreachable as the numbers currently stand: `levelCount` floors against the field's
-    // own maximum, so the innermost threshold sits a whole step below it and some sample is
-    // always above it. Kept because that argument leans on three other modules — the
-    // coverage field's zero padding, the tracer's minimum loop length, and `nestLoops`'
-    // filter — and an empty level in the array is worse for a renderer than a missing one.
+    // Level 0 traces to nothing when no sample reaches majority coverage. The map format
+    // allows exactly that: `top: false` on a cell is an explicitly-present flag, so
+    // `ObstacleSystem` registers a triangle entry that activates no quadrant, and the cell
+    // rasterises to all-zero coverage. Inner levels are a different matter — `levelCount`
+    // floors against the field's own maximum, so their thresholds always have samples above
+    // them — but the guard covers both rather than relying on that argument, which leans on
+    // invariants owned by three other modules.
     if (polygons.length === 0) break;
     levels.push({ index: i, polygons });
   }
+
+  // Nothing traceable was painted. Reuse the "nothing to draw" contract the caller already
+  // handles for an empty cell list, rather than handing back a `levels[0]` that is not there.
+  if (levels.length === 0) return null;
 
   const shoreline = shorelineTiles > 0
     ? tracePolygons(field, -shorelineTiles, OUTER_TOLERANCE)

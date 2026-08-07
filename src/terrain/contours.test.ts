@@ -60,6 +60,44 @@ describe('buildTerrainContours', () => {
     expect(buildTerrainContours([])).toBeNull();
   });
 
+  it('returns null when the painted cells rasterise to nothing traceable', () => {
+    // Reachable straight from the map format: `"top": false` is an explicitly-present flag,
+    // so `ObstacleSystem` registers a triangle entry that activates no quadrant and the cell
+    // covers no subsample at all. Consumers guard on `!contours`, so `null` is the answer
+    // they already handle — an object with an empty `levels` would crash on `levels[0]`.
+    const noQuadrants: TriangleMap = new Map([['5,5', {}]]);
+    expect(buildTerrainContours([{ gx: 5, gy: 5 }], noQuadrants)).toBeNull();
+
+    const explicitlyOff: TriangleMap = new Map([['5,5', { top: false }]]);
+    expect(buildTerrainContours([{ gx: 5, gy: 5 }], explicitlyOff)).toBeNull();
+
+    // Asking for a shoreline must not change the answer, nor reach `levels[0]` on the way.
+    expect(buildTerrainContours([{ gx: 5, gy: 5 }], noQuadrants, 0.2)).toBeNull();
+    expect(buildTerrainContours(
+      [{ gx: 5, gy: 5 }, { gx: 6, gy: 5 }],
+      new Map([['5,5', {}], ['6,5', { left: false }]]),
+      0.2,
+    )).toBeNull();
+  });
+
+  it('never returns a contour set without a footprint to draw', () => {
+    // The invariant the null above protects: any non-null result has a usable `levels[0]`.
+    const inputs: [{ gx: number; gy: number }[], TriangleMap | undefined][] = [
+      [[{ gx: 5, gy: 5 }], undefined],
+      [[{ gx: 5, gy: 5 }], new Map([['5,5', {}]])],
+      [[{ gx: 5, gy: 5 }], new Map([['5,5', { top: true }]])],
+      [[{ gx: 5, gy: 5 }], new Map([['5,5', { top: false, right: false }]])],
+      [block(1, 1, 4, 4), new Map([['1,1', {}], ['4,4', {}]])],
+    ];
+    for (const [cells, triangles] of inputs) {
+      const c = buildTerrainContours(cells, triangles, 0.2);
+      if (c === null) continue;
+      expect(c.levels.length).toBeGreaterThan(0);
+      expect(c.levels[0].polygons.length).toBeGreaterThan(0);
+      expect(c.levels[0].polygons[0].outer.length).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it('gives a single cell one terrace that does not collapse', () => {
     const c = buildTerrainContours([{ gx: 5, gy: 5 }])!;
     expect(c.levels).toHaveLength(1);
