@@ -266,12 +266,6 @@ export class Renderer {
     }
   }
 
-  panBy(dx: number, dz: number): void {
-    this.cameraTargetX += dx;
-    this.cameraTargetZ += dz;
-    this.needsRender = true;
-  }
-
   tiltBy(delta: number): void {
     if (this.isometricMode) return;
     this.targetTilt = clamp(this.targetTilt + delta, 0, MAX_TILT);

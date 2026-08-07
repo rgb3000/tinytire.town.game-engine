@@ -11,7 +11,9 @@ import { GasStationSystem } from '../systems/GasStationSystem';
 import { HighwaySystem } from '../systems/HighwaySystem';
 import { buildConfig, MOUNTAIN_MIN_HEIGHT, MOUNTAIN_MAX_HEIGHT, TILE_SIZE } from '../constants';
 import { InputHandler } from '../input/InputHandler';
-import { isTypingTarget } from '../input/keyboardTarget';
+import { CameraController } from '../input/CameraController';
+import { KeyBindings } from '../input/KeyBindings';
+import { designerKeyBindings } from './designerKeyBindings';
 import { RoadDrawer } from '../input/RoadDrawer';
 import { HighwayDrawer } from '../input/HighwayDrawer';
 import { serializeMapConfig } from '../maps/serializeMap';
@@ -75,11 +77,8 @@ export class MapDesigner {
   private disposed = false;
   private paused = false;
 
-  // Pan/zoom state
-  private spaceDown = false;
-  private isPanning = false;
-  private lastPanX = 0;
-  private lastPanY = 0;
+  private camera: CameraController;
+  private keyBindings: KeyBindings;
 
   // Designer state
   activeTool: DesignerTool = DesignerTool.Road;
@@ -111,15 +110,11 @@ export class MapDesigner {
     this.constantsOverrides[key] = value as GameConstants[K];
   }
 
-  // Event listener references for cleanup
+  // Event listener references for cleanup. Wheel, keyboard and the pan half of the
+  // mouse gestures belong to `camera`/`keyBindings` now; what is left is placement.
   private resizeHandler: () => void;
-  private keydownHandler: (e: KeyboardEvent) => void;
-  private keyupHandler: (e: KeyboardEvent) => void;
   private mousedownHandler: (e: MouseEvent) => void;
   private mousemoveHandler: (e: MouseEvent) => void;
-  private mouseupHandler: (e: MouseEvent) => void;
-  private wheelHandler: (e: WheelEvent) => void;
-  private contextMenuHandler: (e: Event) => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -185,10 +180,6 @@ export class MapDesigner {
       () => this.activeTool === DesignerTool.Highway ? Tool.Highway : (this.activeTool === DesignerTool.Eraser ? Tool.Eraser : Tool.Road),
     );
 
-    // Wheel: pan/zoom
-    this.wheelHandler = (e) => this.renderer.onWheel(e);
-    canvas.addEventListener('wheel', this.wheelHandler, { passive: false });
-
     // Resize
     this.resizeHandler = () => {
       this.webglRenderer.setSize(window.innerWidth, window.innerHeight);
@@ -196,115 +187,57 @@ export class MapDesigner {
     };
     window.addEventListener('resize', this.resizeHandler);
 
-    // Keyboard
-    this.keydownHandler = (e: KeyboardEvent) => {
-      // See Game's handler: window-level shortcuts must not eat a host's typing.
-      if (isTypingTarget(e.target)) return;
-      if (e.key === '+' || e.key === '=') this.renderer.zoomByKey(1);
-      if (e.key === '-') this.renderer.zoomByKey(-1);
-      if (e.key === 'r' || e.key === 'R') this.setTool(DesignerTool.Road);
-      if (e.key === 'e' || e.key === 'E') this.setTool(DesignerTool.Eraser);
-      if (e.key === 'h' || e.key === 'H') this.setTool(DesignerTool.House);
-      if (e.key === 'b' || e.key === 'B') this.setTool(DesignerTool.Business);
-      if (e.key === 'm' || e.key === 'M') this.setTool(DesignerTool.Mountain);
-      if (e.key === 'l' || e.key === 'L') this.setTool(DesignerTool.Lake);
-      if (e.key === 'g' || e.key === 'G') this.setTool(DesignerTool.GasStation);
-      if (e.key === 'w' || e.key === 'W') this.setTool(DesignerTool.Highway);
-      if (e.key === 'p' || e.key === 'P') this.setTool(DesignerTool.Paint);
-      if (e.key === 'v' || e.key === 'V') {
-        this.toggleIsometric();
-        this.onToolChange?.();
-      }
-      if (e.key >= '1' && e.key <= '6') {
-        const colors = [GameColor.Red, GameColor.Blue, GameColor.Yellow, GameColor.Green, GameColor.Purple, GameColor.Orange];
-        this.activeColor = colors[parseInt(e.key) - 1];
-        this.onToolChange?.();
-      }
-      if (e.key === ' ' && !e.repeat) {
-        e.preventDefault();
-        this.spaceDown = true;
-        this.input.panningActive = true;
-        this.canvas.style.cursor = 'grab';
-      }
-    };
-    window.addEventListener('keydown', this.keydownHandler);
+    // Wheel zoom, space-to-pan and drag-to-tilt, plus the one writer of the cursor. This
+    // was ~60 hand-rolled lines here with its own `spaceDown`/`isPanning`/`lastPanX/Y`,
+    // which had already drifted from the shared class: no tilt at all, and a pan that
+    // divided the screen delta by zoom instead of raycasting, so it dragged along the
+    // wrong axes as soon as the camera was tilted or in isometric mode.
+    //
+    // The renderer is assign-once here, unlike `Game`'s, but it arrives as a getter all
+    // the same — one call shape across both shells is worth more than saving a closure.
+    this.camera = new CameraController(
+      canvas,
+      this.input,
+      () => this.renderer,
+      () => this.cursorForActiveTool(),
+    );
 
-    this.keyupHandler = (e: KeyboardEvent) => {
-      if (isTypingTarget(e.target)) return;
-      if (e.key === ' ') {
-        this.spaceDown = false;
-        this.isPanning = false;
-        this.input.panningActive = false;
-        this.canvas.style.cursor = this.getCursorForTool();
-      }
-    };
-    window.addEventListener('keyup', this.keyupHandler);
+    this.keyBindings = new KeyBindings(designerKeyBindings({
+      zoomBy: (direction) => this.renderer.zoomByKey(direction),
+      selectTool: (tool) => this.setTool(tool),
+      // `activeColor` is a public field and `toggleIsometric()` a public method, both of
+      // which hosts drive directly and then re-sync their own UI themselves — see
+      // `demo/designPanel.ts` and the website's `DesignerUI`. So only the keyboard path
+      // announces the change; firing `onToolChange` from the setters would double it.
+      selectColor: (color) => { this.activeColor = color; this.onToolChange?.(); },
+      toggleIsometric: () => { this.toggleIsometric(); this.onToolChange?.(); },
+      beginSpacePan: () => this.camera.beginPan(),
+      endSpacePan: () => this.camera.endPan(),
+    }));
 
-    // Mouse: space+drag pan, left-click placement for non-road tools
+    // Placement only — the camera owns the drag whenever space is held. `panningActive` is
+    // set by `CameraController.beginPan()` on the space *keydown*, so it is already true
+    // before any mouse event of a pan gesture arrives. It is the same flag `InputHandler`
+    // uses to keep `RoadDrawer` from drawing through a pan.
+    //
+    // These run after `InputHandler`'s own listeners, which is load-bearing: `mousedown`
+    // reads a `state.gridPos` that `InputHandler.updatePosition()` must have refreshed first.
     this.mousedownHandler = (e: MouseEvent) => {
-      if (this.spaceDown && e.button === 0) {
-        this.isPanning = true;
-        this.lastPanX = e.clientX;
-        this.lastPanY = e.clientY;
-        this.canvas.style.cursor = 'grabbing';
-        return;
-      }
-
+      if (this.input.panningActive || e.button !== 0) return;
       const pos = this.input.state.gridPos;
-
-      if (e.button === 0) {
-        // Left click — only handle non-road tools here; Road/Eraser handled by RoadDrawer
-        if (this.activeTool === DesignerTool.House) {
-          this.placeHouse(pos.gx, pos.gy);
-        } else if (this.activeTool === DesignerTool.Business) {
-          this.placeBusiness(pos.gx, pos.gy);
-        } else if (this.activeTool === DesignerTool.Mountain || this.activeTool === DesignerTool.Lake) {
-          const world = this.renderer.screenToWorld(e.clientX, e.clientY);
-          this.placeObstacleAt(world.x, world.z);
-        } else if (this.activeTool === DesignerTool.GasStation) {
-          this.placeGasStation(pos.gx, pos.gy);
-        } else if (this.activeTool === DesignerTool.Paint) {
-          const world = this.renderer.screenToWorld(e.clientX, e.clientY);
-          this.paintAt(world.x, world.z);
-        }
-      }
+      // Road/Eraser are not handled here; `RoadDrawer.update()` polls for them.
+      if (this.activeTool === DesignerTool.House) this.placeHouse(pos.gx, pos.gy);
+      else if (this.activeTool === DesignerTool.Business) this.placeBusiness(pos.gx, pos.gy);
+      else if (this.activeTool === DesignerTool.GasStation) this.placeGasStation(pos.gx, pos.gy);
+      else this.brushAt(e);
     };
     canvas.addEventListener('mousedown', this.mousedownHandler);
 
     this.mousemoveHandler = (e: MouseEvent) => {
-      if (this.isPanning) {
-        const dx = e.clientX - this.lastPanX;
-        const dy = e.clientY - this.lastPanY;
-        this.lastPanX = e.clientX;
-        this.lastPanY = e.clientY;
-        const zoom = this.renderer.getCurrentZoom();
-        this.renderer.panBy(-dx / zoom, -dy / zoom);
-        return;
-      }
-
-      if ((this.activeTool === DesignerTool.Mountain || this.activeTool === DesignerTool.Lake) && (e.buttons & 1)) {
-        const world = this.renderer.screenToWorld(e.clientX, e.clientY);
-        this.placeObstacleAt(world.x, world.z);
-      }
-      if (this.activeTool === DesignerTool.Paint && (e.buttons & 1)) {
-        const world = this.renderer.screenToWorld(e.clientX, e.clientY);
-        this.paintAt(world.x, world.z);
-      }
-      // Road/Eraser drag handled by RoadDrawer.update()
+      if (this.input.panningActive || (e.buttons & 1) === 0) return;
+      this.brushAt(e);
     };
     canvas.addEventListener('mousemove', this.mousemoveHandler);
-
-    this.mouseupHandler = (e: MouseEvent) => {
-      if (e.button === 0 && this.isPanning) {
-        this.isPanning = false;
-        this.canvas.style.cursor = this.spaceDown ? 'grab' : this.getCursorForTool();
-      }
-      // Road/Eraser mouseup handled by RoadDrawer.update()
-    };
-    canvas.addEventListener('mouseup', this.mouseupHandler);
-
-    this.contextMenuHandler = (e: Event) => e.preventDefault();
-    canvas.addEventListener('contextmenu', this.contextMenuHandler);
 
     this.renderer.markGroundDirty();
   }
@@ -353,25 +286,52 @@ export class MapDesigner {
     this.renderer.dispose();
     this.webglRenderer.dispose();
     window.removeEventListener('resize', this.resizeHandler);
-    window.removeEventListener('keydown', this.keydownHandler);
-    window.removeEventListener('keyup', this.keyupHandler);
+    // The wheel listener these replace was registered as an inline arrow and never removed
+    // at all, so a disposed designer kept driving a disposed renderer on every scroll.
+    this.camera.dispose();
+    this.keyBindings.dispose();
     this.canvas.removeEventListener('mousedown', this.mousedownHandler);
     this.canvas.removeEventListener('mousemove', this.mousemoveHandler);
-    this.canvas.removeEventListener('mouseup', this.mouseupHandler);
-    this.canvas.removeEventListener('contextmenu', this.contextMenuHandler);
   }
 
   setTool(tool: DesignerTool): void {
     this.activeTool = tool;
     if (tool === DesignerTool.Mountain) this.obstacleType = 'mountain';
     if (tool === DesignerTool.Lake) this.obstacleType = 'lake';
-    this.canvas.style.cursor = this.getCursorForTool();
+    this.camera.syncCursor();
     this.onToolChange?.();
   }
 
-  private getCursorForTool(): string {
-    if (this.activeTool === DesignerTool.Eraser || this.activeTool === DesignerTool.Highway) return 'crosshair';
-    return 'default';
+  /**
+   * The cursor to show when no camera gesture is in progress.
+   *
+   * Read only by `CameraController.syncCursor()`, which is the sole writer of
+   * `canvas.style.cursor`. There used to be five writers here — the space keydown/keyup,
+   * the pan mousedown/mouseup and `setTool` — and they disagreed: selecting a tool during a
+   * space-pan clobbered `grab`, and this predicate was missing the GasStation case that
+   * `Game.cursorForActiveTool()` has, so the Gas tool showed an arrow in the designer and a
+   * crosshair in the game.
+   */
+  private cursorForActiveTool(): string {
+    return (this.activeTool === DesignerTool.Eraser
+         || this.activeTool === DesignerTool.Highway
+         || this.activeTool === DesignerTool.GasStation)
+      ? 'crosshair'
+      : 'default';
+  }
+
+  /**
+   * Paint or raise terrain under the pointer, for the three tools that work on a continuous
+   * surface rather than a grid cell. One helper because the screen-to-world-then-branch
+   * dance was written out four times across the old mousedown and mousemove handlers.
+   */
+  private brushAt(e: MouseEvent): void {
+    if (this.activeTool !== DesignerTool.Mountain
+     && this.activeTool !== DesignerTool.Lake
+     && this.activeTool !== DesignerTool.Paint) return;
+    const world = this.renderer.screenToWorld(e.clientX, e.clientY);
+    if (this.activeTool === DesignerTool.Paint) this.paintAt(world.x, world.z);
+    else this.placeObstacleAt(world.x, world.z);
   }
 
   placeHouse(gx: number, gy: number): void {

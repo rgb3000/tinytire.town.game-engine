@@ -7,7 +7,8 @@ import { GameLoop } from './GameLoop';
 import { Renderer } from '../rendering/Renderer';
 import { InputHandler } from '../input/InputHandler';
 import { CameraController } from '../input/CameraController';
-import { GameInputBindings } from '../input/GameInputBindings';
+import { KeyBindings } from '../input/KeyBindings';
+import { gameKeyBindings } from './gameKeyBindings';
 import { RoadDrawer } from '../input/RoadDrawer';
 import type { InventorySlot } from '../input/RoadDrawer';
 import { UndoSystem } from '../input/UndoSystem';
@@ -78,7 +79,7 @@ export class Game {
   private timeScale: number = 1;
   private stateCallback: ((state: GameState, score: number, time: number, inventory: Inventory, demandStats: DemandStat[] | null, gameDay: number, timeScale: number, gameWeek: number, weekChoicePending: boolean, pendingChoiceOptions: WeeklyChoiceOption[]) => void) | null = null;
   private camera: CameraController;
-  private keyBindings: GameInputBindings;
+  private keyBindings: KeyBindings;
   private canvas: HTMLCanvasElement;
   private onUndoStateChange: (() => void) | null = null;
   private musicEnabled = true;
@@ -133,7 +134,7 @@ export class Game {
       () => this.cursorForActiveTool(),
     );
 
-    this.keyBindings = new GameInputBindings({
+    this.keyBindings = new KeyBindings(gameKeyBindings({
       zoomBy: (direction) => this.renderer.zoomByKey(direction),
       togglePause: () => this.togglePause(),
       undo: () => this.performUndo(),
@@ -142,7 +143,7 @@ export class Game {
       toggleIsometric: () => this.toggleIsometric(),
       beginSpacePan: () => this.camera.beginPan(),
       endSpacePan: () => this.camera.endPan(),
-    });
+    }));
   }
 
   /**
@@ -152,6 +153,10 @@ export class Game {
    * Highway and GasStation a crosshair, while the space-keyup and mouseup handlers restored
    * one only for the Eraser — so space-panning with the Highway tool left you with the wrong
    * cursor.
+   *
+   * Read only by `CameraController.syncCursor()`, which is the sole writer of
+   * `canvas.style.cursor`. `setActiveTool` used to write it directly with a second copy of
+   * this predicate, which meant picking a tool mid-space-pan clobbered `grab`/`grabbing`.
    */
   private cursorForActiveTool(): string {
     return (this.activeTool === Tool.Eraser || this.activeTool === Tool.Highway || this.activeTool === Tool.GasStation)
@@ -529,7 +534,7 @@ export class Game {
       return;
     }
     this.activeTool = tool;
-    this.canvas.style.cursor = (tool === Tool.Eraser || tool === Tool.Highway || tool === Tool.GasStation) ? 'crosshair' : 'default';
+    this.camera.syncCursor();
     this.toolChangeCallback?.(tool);
   }
 
