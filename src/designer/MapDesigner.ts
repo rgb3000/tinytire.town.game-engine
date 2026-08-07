@@ -638,6 +638,22 @@ export class MapDesigner {
     img.src = url;
   }
 
+  /**
+   * Whether a blueprint image is loaded, independent of whether it is currently shown.
+   *
+   * A separate question from {@link blueprintVisible}, and hosts need both: hiding a
+   * blueprint has to keep the control that shows it again, so visibility alone would make
+   * the toggle disappear the moment you used it.
+   *
+   * Exists because the website was answering it by reaching through bracket notation for a
+   * private `blueprintImage` field — which type-checked only because bracket access
+   * bypasses `private`, and broke the day that field was removed. The narrow operation it
+   * actually wanted is this boolean, not the image.
+   */
+  hasBlueprint(): boolean {
+    return this.blueprintObjectUrl !== null;
+  }
+
   toggleBlueprint(): void {
     this.blueprintVisible = !this.blueprintVisible;
     this.renderer.setBlueprintVisible(this.blueprintVisible);
