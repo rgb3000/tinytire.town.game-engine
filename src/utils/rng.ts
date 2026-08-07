@@ -2,9 +2,9 @@
  * A small deterministic PRNG, used so terrain generation can be pinned in tests.
  *
  * The engine previously called `Math.random()` directly everywhere, which meant generated
- * terrain could not be asserted on at all. `ObstacleSystem` takes a seed and threads this
- * through instead. It is a *generation* seed, not a wire-format field: maps do not carry
- * one, and unseeded construction still randomises so gameplay stays varied.
+ * terrain could not be asserted on at all. This exists so that `ObstacleSystem` can take a
+ * seed and thread it through instead. It is a *generation* seed, not a wire-format field:
+ * maps do not carry one, and unseeded construction still randomises so gameplay stays varied.
  */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
