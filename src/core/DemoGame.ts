@@ -15,6 +15,7 @@ import { buildConfig } from '../constants';
 import type { MapConfig } from '../maps/types';
 import { buildColorTheme } from '../designer/colorTheme';
 import { applyMapConfig, backgroundTilesToMap } from './applyMapConfig';
+import { flushWorldDirty, updateConnectorStatus } from './worldFrame';
 
 export class DemoGame {
   private webglRenderer: THREE.WebGLRenderer;
@@ -52,7 +53,7 @@ export class DemoGame {
       () => this.spawnSystem.getHouses(),
       () => this.spawnSystem.getBusinesses(),
     );
-    this.renderer.buildObstacles(
+    this.renderer.rebuildTerrain(
       this.obstacleSystem.getMountainCells(),
       this.obstacleSystem.getLakeCells(),
       this.obstacleSystem.getMountainTriangles(),
@@ -117,19 +118,16 @@ export class DemoGame {
   }
 
   private update(dt: number): void {
-    if (this.roadSystem.isDirty) {
-      this.pathfinder.clearCache();
-      this.carSystem.onRoadsChanged(this.spawnSystem.getHouses());
-      this.roadSystem.clearDirty();
-      this.grid.recomputeIntersectionFlags();
-      this.renderer.markGroundDirty();
-    }
-
-    // Update business connector status
-    for (const biz of this.spawnSystem.getBusinesses()) {
-      const cell = this.grid.getCell(biz.connectorPos.gx, biz.connectorPos.gy);
-      biz.connected = cell ? cell.roadConnections !== 0 : false;
-    }
+    // No `gasStationSystem`: this world has none, by the constructor's design.
+    flushWorldDirty({
+      grid: this.grid,
+      roadSystem: this.roadSystem,
+      highwaySystem: this.highwaySystem,
+      pathfinder: this.pathfinder,
+      carSystem: this.carSystem,
+      getHouses: () => this.spawnSystem.getHouses(),
+    }, this.renderer);
+    updateConnectorStatus(this.grid, this.spawnSystem.getBusinesses());
 
     this.spawnSystem.update(dt);
     if (this.spawnSystem.isDirty) {

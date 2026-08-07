@@ -46,6 +46,19 @@ export class GasStationSystem {
     return station;
   }
 
+  /**
+   * Put a previously removed station back, keeping its original id.
+   *
+   * Deliberately does *not* touch the grid: the only caller is undo, which restores cells
+   * from its own snapshots. Re-placing the cell here would fight those snapshots — and
+   * `placeGasStation` could not be reused anyway, since it mints a fresh id and the cell
+   * snapshot still refers to the old one.
+   */
+  restore(station: GasStation): void {
+    this.gasStations.push(station);
+    this.isDirty = true;
+  }
+
   removeGasStation(id: string): boolean {
     const idx = this.gasStations.findIndex(gs => gs.id === id);
     if (idx === -1) return false;
@@ -53,13 +66,7 @@ export class GasStationSystem {
     const station = this.gasStations[idx];
 
     // Clear the single cell
-    this.grid.setCell(station.pos.gx, station.pos.gy, {
-      type: CellType.Empty,
-      entityId: null,
-      roadConnections: 0,
-      connectorDir: null,
-      color: null,
-    });
+    this.grid.clearCell(station.pos.gx, station.pos.gy);
 
     this.gasStations.splice(idx, 1);
     this.isDirty = true;

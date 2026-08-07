@@ -3,6 +3,7 @@ import type { HighwaySystem } from '../systems/HighwaySystem';
 import type { Grid } from '../core/Grid';
 import type { InventorySlot } from './RoadDrawer';
 import type { GridPos } from '../types';
+import type { Highway } from '../highways/types';
 import { CellType, Tool } from '../types';
 import { TILE_SIZE } from '../constants';
 import { defaultControlPoints } from '../highways/highwayGeometry';
@@ -192,15 +193,21 @@ export class HighwayDrawer {
     this.wasRightDown = rightDown;
   }
 
-  /** Try to erase a highway at the given cell */
-  tryEraseAtCell(gx: number, gy: number): boolean {
+  /**
+   * Try to erase the highways ending at the given cell.
+   *
+   * Returns the removed highways — empty when there were none — rather than a bare boolean,
+   * so the caller can hand them to undo. They are returned instead of recorded here because
+   * this drawer has no undo stack of its own: the erase runs inside whatever group
+   * `RoadDrawer` opened, and `Game` is the one that knows about it.
+   */
+  tryEraseAtCell(gx: number, gy: number): Highway[] {
     const highways = this.highwaySystem.getHighwaysAtCell(gx, gy);
-    if (highways.length === 0) return false;
     for (const hw of highways) {
       this.highwaySystem.removeHighway(hw.id);
       this.stock.restore(1);
     }
-    return highways.length > 0;
+    return highways;
   }
 
   private finalize(): void {

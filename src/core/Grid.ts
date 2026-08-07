@@ -31,6 +31,27 @@ export class Grid {
     Object.assign(existing, cell);
   }
 
+  /**
+   * Return a cell to the empty state, every field of it.
+   *
+   * Five copies of this object literal used to sit in `RoadSystem`, `GasStationSystem` and
+   * `MapDesigner`, and they disagreed: the gas-station one omitted `pendingDeletion`, so
+   * erasing a station from a cell that was mid-pending-deletion left the flag set and the
+   * cell rendering as faded forever. One definition, matching the constructor's defaults.
+   */
+  clearCell(gx: number, gy: number): void {
+    if (!this.inBounds(gx, gy)) return;
+    const cell = this.cells[gy * this.cols + gx];
+    cell.type = CellType.Empty;
+    cell.entityId = null;
+    cell.roadConnections = 0;
+    cell.color = null;
+    cell.connectorDir = null;
+    cell.pendingDeletion = false;
+    cell._isIntersection = false;
+    cell._isTIntersection = false;
+  }
+
   pixelToGrid(px: number, py: number): GridPos {
     return {
       gx: Math.floor(px / TILE_SIZE),

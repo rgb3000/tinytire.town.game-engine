@@ -51,14 +51,7 @@ export class RoadSystem {
       }
     }
 
-    this.grid.setCell(gx, gy, {
-      type: CellType.Empty,
-      entityId: null,
-      roadConnections: 0,
-      color: null,
-      connectorDir: null,
-      pendingDeletion: false,
-    });
+    this.grid.clearCell(gx, gy);
 
     this.dirty = true;
     return true;
@@ -110,14 +103,7 @@ export class RoadSystem {
     });
 
     if (cell.roadConnections === 0) {
-      this.grid.setCell(gx, gy, {
-        type: CellType.Empty,
-        entityId: null,
-        roadConnections: 0,
-        color: null,
-        connectorDir: null,
-        pendingDeletion: false,
-      });
+      this.grid.clearCell(gx, gy);
     }
 
     this.dirty = true;

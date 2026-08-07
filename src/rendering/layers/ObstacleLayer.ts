@@ -147,18 +147,29 @@ export class ObstacleLayer {
     }
   }
 
+  /**
+   * Drop everything this layer put in the scene — geometries *and* materials.
+   *
+   * There used to be two methods here: `dispose`, which `build()` calls before rebuilding,
+   * and `disposeAll`, which additionally freed the materials. Every material is created
+   * inside `build()` and attached to a mesh that lives only inside `this.group`, so the two
+   * had identical preconditions and the only difference was whether they leaked. The
+   * designer rebuilds terrain on every brush stroke, so the leaking one leaked a full set
+   * of GPU material programs per stroke.
+   *
+   * The material loop must stay *above* the `group` guard: `build()` calls this and then
+   * bails out when there are no cells left, which is what happens when you erase the last
+   * mountain — an early return would strand that build's materials for good.
+   */
   dispose(scene: THREE.Scene): void {
+    for (const mat of this.materials) mat.dispose();
+    this.materials = [];
+
     if (!this.group) return;
     this.group.traverse((obj) => {
       if (obj instanceof THREE.Mesh) obj.geometry.dispose();
     });
     scene.remove(this.group);
     this.group = null;
-  }
-
-  disposeAll(scene: THREE.Scene): void {
-    this.dispose(scene);
-    for (const mat of this.materials) mat.dispose();
-    this.materials = [];
   }
 }

@@ -1,5 +1,8 @@
 import type { Grid } from '../core/Grid';
 import type { Cell } from '../types';
+import type { Inventory } from '../maps/types';
+import type { GasStation } from '../entities/GasStation';
+import type { Highway } from '../highways/types';
 
 interface CellSnapshot {
   gx: number;
@@ -7,15 +10,26 @@ interface CellSnapshot {
   cell: Cell; // deep copy
 }
 
-interface InventoryDelta {
-  roads: number;
-  highways: number;
-  gasStations: number;
-}
+/**
+ * Signed counts, not stock levels — but exactly the shape of `Inventory`, so it is aliased
+ * rather than restated. A hand-written copy is how `addInventoryDelta`'s slot union came to
+ * duplicate `keyof Inventory`.
+ */
+type InventoryDelta = Inventory;
 
-interface UndoGroup {
+export interface UndoGroup {
   cellSnapshots: Map<string, CellSnapshot>;
   inventoryDelta: InventoryDelta;
+  /**
+   * Entities destroyed by this edit, held by reference so they can be put back with their
+   * original ids — a cell snapshot alone cannot resurrect them, it only restores a cell
+   * whose `entityId` points at something that no longer exists.
+   *
+   * Recorded here but *applied* by the caller, the same way `inventoryDelta` is: that keeps
+   * this class's only system dependency `Grid`.
+   */
+  removedGasStations: GasStation[];
+  removedHighways: Highway[];
 }
 
 const MAX_UNDO_STACK = 50;
@@ -46,6 +60,8 @@ export class UndoSystem {
     this.currentGroup = {
       cellSnapshots: new Map(),
       inventoryDelta: { roads: 0, highways: 0, gasStations: 0 },
+      removedGasStations: [],
+      removedHighways: [],
     };
   }
 
@@ -73,14 +89,34 @@ export class UndoSystem {
     });
   }
 
-  addInventoryDelta(slot: 'roads' | 'highways' | 'gasStations', delta: number): void {
+  addInventoryDelta(slot: keyof Inventory, delta: number): void {
     if (!this.currentGroup) return;
     this.currentGroup.inventoryDelta[slot] += delta;
   }
 
+  addRemovedGasStation(station: GasStation): void {
+    if (!this.currentGroup) return;
+    this.currentGroup.removedGasStations.push(station);
+  }
+
+  addRemovedHighway(highway: Highway): void {
+    if (!this.currentGroup) return;
+    this.currentGroup.removedHighways.push(highway);
+  }
+
+  /** Whether this group would change anything if undone. */
+  private isEmpty(group: UndoGroup): boolean {
+    return group.cellSnapshots.size === 0
+      && group.removedGasStations.length === 0
+      && group.removedHighways.length === 0;
+  }
+
   endGroup(): void {
     if (!this.currentGroup) return;
-    if (this.currentGroup.cellSnapshots.size === 0) {
+    // Tests emptiness across everything a group can hold, not just cells. Today every erase
+    // is snapshotted by `RoadDrawer` before it delegates, so a group with entities always
+    // has cells too; this keeps a future entity-only recorder from being silently dropped.
+    if (this.isEmpty(this.currentGroup)) {
       this.currentGroup = null;
       return;
     }

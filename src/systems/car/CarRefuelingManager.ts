@@ -4,10 +4,8 @@ import type { Business } from '../../entities/Business';
 import type { House } from '../../entities/House';
 import type { Pathfinder } from '../../pathfinding/Pathfinder';
 import type { CarRouter } from './CarRouter';
-import { stepGridPos } from './CarRouter';
 import type { GasStationSystem } from '../GasStationSystem';
 import type { CarTuning } from './CarTuning';
-import { getDirection, directionAngle } from '../../utils/direction';
 
 export class CarRefuelingManager {
   private pathfinder: Pathfinder;
@@ -31,12 +29,7 @@ export class CarRefuelingManager {
     }
 
     // Car arrived at gas station tile — start refueling directly
-    car.path = [];
-    car.pathIndex = 0;
-    car.segmentProgress = 0;
-    car.smoothPath = [];
-    car.smoothCumDist = [];
-    car.smoothCellDist = [];
+    car.clearPathState();
     car.state = CarState.Refueling;
     car.refuelTimer = 0;
   }
@@ -90,7 +83,7 @@ export class CarRefuelingManager {
           car.targetBusinessId = bestBiz.id;
           car.destination = bestBiz.connectorPos;
           this.router.assignPath(car, path);
-          this.snapCarToSmoothStart(car, path);
+          this.router.snapToPathStart(car, path);
           return;
         }
       }
@@ -104,7 +97,7 @@ export class CarRefuelingManager {
           car.targetBusinessId = null;
           car.destination = home.pos;
           this.router.assignPath(car, homePath);
-          this.snapCarToSmoothStart(car, homePath);
+          this.router.snapToPathStart(car, homePath);
           return;
         }
       }
@@ -112,27 +105,6 @@ export class CarRefuelingManager {
 
     // If no path found, strand the car
     car.state = CarState.Stranded;
-    car.path = [];
-    car.pathIndex = 0;
-    car.segmentProgress = 0;
-    car.smoothPath = [];
-    car.smoothCumDist = [];
-    car.smoothCellDist = [];
-  }
-
-  private snapCarToSmoothStart(car: Car, path: import('../../highways/types').PathStep[]): void {
-    if (car.smoothPath.length >= 2) {
-      car.pixelPos.x = car.smoothPath[0].x;
-      car.pixelPos.y = car.smoothPath[0].y;
-      car.prevPixelPos.x = car.pixelPos.x;
-      car.prevPixelPos.y = car.pixelPos.y;
-      if (path.length >= 2) {
-        const p0 = stepGridPos(path[0]);
-        const p1 = stepGridPos(path[1]);
-        const initDir = getDirection(p0, p1);
-        car.renderAngle = directionAngle(initDir);
-        car.prevRenderAngle = car.renderAngle;
-      }
-    }
+    car.clearPathState();
   }
 }

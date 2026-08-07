@@ -54,6 +54,15 @@ export class SpawnSystem {
   private minBusinessDistance: number;
   private houseRandomPlacementChance: number;
 
+  /**
+   * Bumped whenever a house or business is added or removed — see {@link getColorSupplyRate},
+   * which memoises against it. Distinct from `dirty`, which the renderer clears on its own
+   * schedule and so cannot be used as a cache key.
+   */
+  private mutationEpoch = 0;
+  private supplyCacheEpoch = -1;
+  private supplyCache = new Map<GameColor, number>();
+
   get isDirty(): boolean {
     return this.dirty;
   }
@@ -103,11 +112,13 @@ export class SpawnSystem {
   removeHouse(id: string): void {
     this.houses = this.houses.filter(h => h.id !== id);
     this.dirty = true;
+    this.mutationEpoch++;
   }
 
   removeBusiness(id: string): void {
     this.businesses = this.businesses.filter(b => b.id !== id);
     this.dirty = true;
+    this.mutationEpoch++;
   }
 
   getUnlockedColors(): GameColor[] {
@@ -155,27 +166,59 @@ export class SpawnSystem {
     }
   }
 
+  /**
+   * How many demand pins per minute a colour's houses can currently clear.
+   *
+   * A house far from the businesses it serves spends most of its time driving rather than
+   * delivering, so each house's contribution is scaled by its average octile distance to
+   * same-colour businesses: at or below `HOUSE_SUPPLY_NEAR_DISTANCE` it contributes the max
+   * rate, at or beyond `HOUSE_SUPPLY_FAR_DISTANCE` the min, linearly interpolated between.
+   * See the note above `HOUSE_SUPPLY_PER_MINUTE` in `src/constants.ts`.
+   *
+   * Public because this is also what the HUD reports. It used to be inlined in
+   * `spawnRandom` while the HUD computed a flat `houses × HOUSE_SUPPLY_PER_MINUTE` of its
+   * own, so the number players saw was not the number the spawner acted on, and the
+   * MIN/NEAR/FAR overrides — all map-configurable — changed nothing on screen.
+   *
+   * Memoised per colour, because `Game.render()` now calls this on every rendered frame and
+   * it is O(houses × businesses). The memo is exact rather than approximate: `House.pos` and
+   * `Business.connectorPos` are `readonly`, so the result can only change when an entity is
+   * added or removed. **Anything that starts moving entities must bump `mutationEpoch`.**
+   */
+  getColorSupplyRate(color: GameColor): number {
+    if (this.supplyCacheEpoch !== this.mutationEpoch) {
+      this.supplyCache.clear();
+      this.supplyCacheEpoch = this.mutationEpoch;
+    }
+    const cached = this.supplyCache.get(color);
+    if (cached !== undefined) return cached;
+
+    const sameColorHouses = this.houses.filter(h => h.color === color);
+    const sameColorBiz = this.businesses.filter(b => b.color === color);
+
+    let rate: number;
+    if (sameColorBiz.length === 0) {
+      // No businesses yet — nothing to be far from, so use the max rate as fallback.
+      rate = sameColorHouses.length * this.houseSupplyPerMinute;
+    } else {
+      // Note this averages *distances* and then converts once, rather than averaging
+      // per-business rates. The two differ as soon as the clamp bites.
+      rate = sameColorHouses.reduce((sum, house) => {
+        const avgDist = sameColorBiz.reduce((s, b) => s + octileDist(house.pos, b.connectorPos), 0) / sameColorBiz.length;
+        const t = clamp((avgDist - this.houseSupplyNearDistance) / (this.houseSupplyFarDistance - this.houseSupplyNearDistance), 0, 1);
+        return sum + lerp(this.houseSupplyPerMinute, this.houseSupplyPerMinuteMin, t);
+      }, 0);
+    }
+
+    this.supplyCache.set(color, rate);
+    return rate;
+  }
+
   private spawnRandom(): void {
     // Compute per-color balance: supplyRate - demandRate
     const balances = this.unlockedColors.map(color => {
       const demandRate = this.demandSystem.getColorPinOutputRate(color);
-      const sameColorHouses = this.houses.filter(h => h.color === color);
-      const sameColorBiz = this.businesses.filter(b => b.color === color);
-
-      let supplyRate: number;
-      if (sameColorBiz.length === 0) {
-        // No businesses yet — use max rate as fallback
-        supplyRate = sameColorHouses.length * this.houseSupplyPerMinute;
-      } else {
-        // Scale each house's supply rate based on its average distance to same-color businesses
-        supplyRate = sameColorHouses.reduce((sum, house) => {
-          const avgDist = sameColorBiz.reduce((s, b) => s + octileDist(house.pos, b.connectorPos), 0) / sameColorBiz.length;
-          const t = clamp((avgDist - this.houseSupplyNearDistance) / (this.houseSupplyFarDistance - this.houseSupplyNearDistance), 0, 1);
-          return sum + lerp(this.houseSupplyPerMinute, this.houseSupplyPerMinuteMin, t);
-        }, 0);
-      }
-
-      return { color, balance: supplyRate - demandRate };
+      return { color, balance: this.getColorSupplyRate(color) - demandRate };
     });
 
     // Find most under-supplied color (most negative balance = needs houses)
@@ -227,6 +270,7 @@ export class SpawnSystem {
 
   spawnHouse(pos: GridPos, color: GameColor): void {
     this.dirty = true;
+    this.mutationEpoch++;
 
     const house = new House(pos, color);
     this.houses.push(house);
@@ -244,6 +288,7 @@ export class SpawnSystem {
 
   spawnBusiness(pos: GridPos, color: GameColor, rotation: BusinessRotation): void {
     this.dirty = true;
+    this.mutationEpoch++;
     const business = new Business(pos, color, rotation);
     this.businesses.push(business);
     this.onSpawn?.();

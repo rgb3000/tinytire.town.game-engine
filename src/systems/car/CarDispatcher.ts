@@ -6,7 +6,7 @@ import type { Pathfinder } from '../../pathfinding/Pathfinder';
 import type { CarRouter } from './CarRouter';
 import { stepGridPos } from './CarRouter';
 import { manhattanDist, gridToPixelCenter } from '../../utils/math';
-import { getDirection, directionAngle, directionToLane } from '../../utils/direction';
+import { getDirection, directionToLane } from '../../utils/direction';
 import { occupancyKey } from './CarTrafficManager';
 import { computePathFuelCost } from '../../pathfinding/pathCost';
 import type { GasStationSystem } from '../GasStationSystem';
@@ -138,19 +138,7 @@ export class CarDispatcher {
           this.router.assignPath(car, path);
         }
 
-        if (car.smoothPath.length >= 2) {
-          car.pixelPos.x = car.smoothPath[0].x;
-          car.pixelPos.y = car.smoothPath[0].y;
-          car.prevPixelPos.x = car.pixelPos.x;
-          car.prevPixelPos.y = car.pixelPos.y;
-          if (path.length >= 2) {
-            const p0 = stepGridPos(path[0]);
-            const p1 = stepGridPos(path[1]);
-            const initDir = getDirection(p0, p1);
-            car.renderAngle = directionAngle(initDir);
-            car.prevRenderAngle = car.renderAngle;
-          }
-        }
+        this.router.snapToPathStart(car, path);
 
         if (CAR_DEBUG) CarEventLog.log({ time: 0, carId: car.id, type: 'dispatched', message: `to biz ${biz.id.slice(0, 6)} (${biz.color}), state=${car.state === CarState.GoingToGasStation ? 'GoingToGas' : 'GoingToBiz'}` });
 

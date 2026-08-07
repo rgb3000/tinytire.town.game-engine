@@ -98,21 +98,9 @@ export class CarSystem {
     if (this._rescueTimer >= CarSystem.RESCUE_INTERVAL) {
       this._rescueTimer = 0;
       if (this.cars.some(c => c.state === CarState.Stranded)) {
-        const prevStranded = new Set<string>();
-        for (const car of this.cars) {
-          if (car.state === CarState.Stranded) prevStranded.add(car.id);
-        }
-
-        this.rescueManager.rescueStrandedCars(this.cars, houseMap);
-
-        if (this.onStranded) {
-          for (const car of this.cars) {
-            if (car.state === CarState.Stranded && !prevStranded.has(car.id)) {
-              this.onStranded();
-              break;
-            }
-          }
-        }
+        this.withStrandedDetection(() => {
+          this.rescueManager.rescueStrandedCars(this.cars, houseMap);
+        });
       }
     }
   }
@@ -123,37 +111,51 @@ export class CarSystem {
     houseMap.clear();
     for (const h of houses) houseMap.set(h.id, h);
 
-    // Snapshot stranded cars before rerouting
-    const prevStranded = new Set<string>();
-    for (const car of this.cars) {
-      if (car.state === CarState.Stranded) prevStranded.add(car.id);
-    }
-
-    this.rescueManager.rescueStrandedCars(this.cars, houseMap);
-    this.rescueManager.rerouteActiveCars(this.cars, houseMap);
-
-    // Detect newly stranded cars after rerouting
-    if (this.onStranded) {
-      for (const car of this.cars) {
-        if (car.state === CarState.Stranded && !prevStranded.has(car.id)) {
-          this.onStranded();
-          break;
-        }
-      }
-    }
+    this.withStrandedDetection(() => {
+      this.rescueManager.rescueStrandedCars(this.cars, houseMap);
+      this.rescueManager.rerouteActiveCars(this.cars, houseMap);
+    });
   }
 
   private _prevStranded = new Set<string>();
 
-  private moveCars(dt: number, houses: House[], businesses: Business[], occupied: Map<number, string>, houseMap: Map<string, House>): void {
-    this.trafficManager.advanceFrameTime(dt);
+  /**
+   * Run `fn`, then fire {@link onStranded} once if it left any car newly stranded.
+   *
+   * "Newly" is the whole point: a car that was already stranded before `fn` ran must not
+   * re-alert, or a permanently cut-off car would buzz once a second forever. This was
+   * written out three times — around the periodic rescue, around a road change, and around
+   * movement — and only the movement copy logged the transition.
+   *
+   * Reuses one pooled set rather than allocating, because the movement path runs every
+   * frame. That is safe only while these calls stay strictly sequential: **do not nest
+   * them**, or the inner call will clear the outer call's snapshot.
+   */
+  private withStrandedDetection(fn: () => void): void {
+    if (!this.onStranded) {
+      fn();
+      return;
+    }
 
-    // Snapshot currently stranded cars before updates
     const prevStranded = this._prevStranded;
     prevStranded.clear();
     for (const car of this.cars) {
       if (car.state === CarState.Stranded) prevStranded.add(car.id);
     }
+
+    fn();
+
+    for (const car of this.cars) {
+      if (car.state === CarState.Stranded && !prevStranded.has(car.id)) {
+        if (CAR_DEBUG) CarEventLog.log({ time: 0, carId: car.id, type: 'stranded-new', message: 'became stranded' });
+        this.onStranded();
+        break;
+      }
+    }
+  }
+
+  private moveCars(dt: number, houses: House[], businesses: Business[], occupied: Map<number, string>, houseMap: Map<string, House>): void {
+    this.trafficManager.advanceFrameTime(dt);
 
     const bizMap = this._businessMap;
     bizMap.clear();
@@ -168,33 +170,26 @@ export class CarSystem {
       this.leaderIndex.findLeader(car);
     }
 
-    for (const car of this.cars) {
-      if (car.state === CarState.Idle || car.state === CarState.Stranded) continue;
-      if (car.state === CarState.Refueling) {
-        this.refuelingManager.updateRefuelingCar(car, dt, bizMap, houseMap);
-        continue;
+    this.withStrandedDetection(() => {
+      for (const car of this.cars) {
+        if (car.state === CarState.Idle || car.state === CarState.Stranded) continue;
+        if (car.state === CarState.Refueling) {
+          this.refuelingManager.updateRefuelingCar(car, dt, bizMap, houseMap);
+          continue;
+        }
+        if (car.state === CarState.Unloading) {
+          this.parkingManager.updateUnloadingCar(car, dt, bizMap, houseMap, () => {
+            this.score++;
+          });
+          continue;
+        }
+        this.movement.updateSingleCar(
+          car, dt, houses, bizMap, occupied, intersectionMap,
+          (c, h, bm) => this.handleArrival(c, h, bm, houseMap),
+          houseMap,
+        );
       }
-      if (car.state === CarState.Unloading) {
-        this.parkingManager.updateUnloadingCar(car, dt, bizMap, houseMap, () => {
-          this.score++;
-        });
-        continue;
-      }
-      this.movement.updateSingleCar(
-        car, dt, houses, bizMap, occupied, intersectionMap,
-        (c, h, bm) => this.handleArrival(c, h, bm, houseMap),
-        houseMap,
-      );
-    }
-
-    // Detect newly stranded cars and fire callback
-    for (const car of this.cars) {
-      if (car.state === CarState.Stranded && !prevStranded.has(car.id)) {
-        if (CAR_DEBUG) CarEventLog.log({ time: 0, carId: car.id, type: 'stranded-new', message: 'became stranded during movement' });
-        this.onStranded?.();
-        break;
-      }
-    }
+    });
   }
 
   private handleArrival(car: Car, _houses: House[], bizMap: Map<string, Business>, houseMap: Map<string, House>): void {

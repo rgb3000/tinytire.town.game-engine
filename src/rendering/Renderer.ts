@@ -167,7 +167,9 @@ export class Renderer {
     this.offCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.terrainLayer.render(this.offCtx, this.lakeCells, this.backgroundTiles, this.paintPalette, this.lakeTris);
 
-    // Ground plane (subdivided to allow lake depressions)
+    // Ground plane — a flat quad. Lakes are not a depression in this mesh: `alphaTest`
+    // below lets the transparent holes that TerrainLayer punches into the ground texture
+    // show the LakeLayer's water meshes through.
     this.groundTexture = new THREE.CanvasTexture(this.offscreenCanvas);
     this.groundTexture.minFilter = THREE.LinearFilter;
     this.groundTexture.magFilter = THREE.LinearFilter;
@@ -297,28 +299,11 @@ export class Renderer {
     return this.currentZoom;
   }
 
-  getCameraState(): { currentZoom: number; targetZoom: number; cameraCenterX: number; cameraCenterZ: number; cameraTargetX: number; cameraTargetZ: number } {
-    return {
-      currentZoom: this.currentZoom,
-      targetZoom: this.targetZoom,
-      cameraCenterX: this.cameraCenterX,
-      cameraCenterZ: this.cameraCenterZ,
-      cameraTargetX: this.cameraTargetX,
-      cameraTargetZ: this.cameraTargetZ,
-    };
-  }
-
-  setCameraState(state: { currentZoom: number; targetZoom: number; cameraCenterX: number; cameraCenterZ: number; cameraTargetX: number; cameraTargetZ: number }): void {
-    this.currentZoom = state.currentZoom;
-    this.targetZoom = state.targetZoom;
-    this.cameraCenterX = state.cameraCenterX;
-    this.cameraCenterZ = state.cameraCenterZ;
-    this.cameraTargetX = state.cameraTargetX;
-    this.cameraTargetZ = state.cameraTargetZ;
-    this.updateFrustum();
-    this.updateCameraPosition();
-    this.needsRender = true;
-  }
+  // `getCameraState`/`setCameraState` used to live here, purely so the designer could carry
+  // the camera across a dispose-and-recreate. Nothing recreates the renderer any more, and
+  // the pair was a trap: it covered zoom and centre but not tilt, azimuth or isometric mode,
+  // so "restoring" the camera silently flattened it. Re-add a snapshot only if something
+  // genuinely needs one, and make it total when you do.
 
   zoomByKey(direction: 1 | -1): void {
     this.targetZoom = clamp(
@@ -352,11 +337,31 @@ export class Renderer {
     this.needsRender = true;
   }
 
-  buildObstacles(mountainCells: GridPos[], lakeCells: GridPos[], mountainTriangles?: MountainTriangles, lakeTriangles?: LakeTriangles): void {
+  /**
+   * Build or replace all terrain geometry, in place. Safe to call on a running renderer:
+   * both layers drop their previous geometry and materials before rebuilding.
+   *
+   * The designer used to rebuild terrain by disposing the whole `Renderer`, constructing a
+   * new one, and hand-replaying camera state, paint, theme, size and blueprint onto it — on
+   * every mousemove sample of a brush stroke. Nothing about the ground requires that: it is
+   * a flat two-triangle plane whose geometry is never touched, and lakes reach it only
+   * through the alpha holes `TerrainLayer` punches into the ground texture. The replay was
+   * also silently incomplete — isometric mode, tilt and azimuth were not on it, so painting
+   * in a tilted view snapped the camera flat.
+   *
+   * `lakeCells`/`lakeTriangles` are what those holes are cut from, so this marks the ground
+   * dirty itself. Before, that worked only because the designer happened to call
+   * `applyColorTheme` — which ends in `markGroundDirty` — immediately beforehand.
+   *
+   * Colours come from the last {@link applyColorTheme}: the layers bake them into materials
+   * at build time, so changing a terrain colour needs a rebuild, not a repaint.
+   */
+  rebuildTerrain(mountainCells: GridPos[], lakeCells: GridPos[], mountainTriangles?: MountainTriangles, lakeTriangles?: LakeTriangles): void {
     this.obstacleLayer.build(this.scene, mountainCells, this.mountainColor, mountainTriangles, this.mountainShorelineColor);
     this.lakeLayer.build(this.scene, lakeCells, lakeTriangles, this.waterColor, this.shorelineColor);
     this.lakeCells = lakeCells;
     this.lakeTris = lakeTriangles;
+    this.markGroundDirty();
   }
 
   updateIndicator(pos: GridPos | null): void {
@@ -423,7 +428,7 @@ export class Renderer {
   }
 
   applyColorTheme(theme: ColorTheme): void {
-    // Mountain/water color (used on next buildObstacles call)
+    // Mountain/water color (used on the next rebuildTerrain call)
     this.mountainColor = theme.mountainColor;
     this.waterColor = theme.waterColor;
     this.shorelineColor = theme.shorelineColor;
@@ -703,8 +708,8 @@ export class Renderer {
     this.roadDebugLayer.dispose(this.scene);
     this.carRouteLayer.dispose(this.scene);
     this.highwayLayer.dispose(this.scene);
-    this.obstacleLayer.disposeAll(this.scene);
-    this.lakeLayer.disposeAll(this.scene);
+    this.obstacleLayer.dispose(this.scene);
+    this.lakeLayer.dispose(this.scene);
     if (this.indicatorMesh) {
       this.scene.remove(this.indicatorMesh);
       this.indicatorMesh.geometry.dispose();

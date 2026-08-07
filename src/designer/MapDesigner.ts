@@ -16,6 +16,7 @@ import { RoadDrawer } from '../input/RoadDrawer';
 import { HighwayDrawer } from '../input/HighwayDrawer';
 import { serializeMapConfig } from '../maps/serializeMap';
 import { applyMapConfig } from '../core/applyMapConfig';
+import { flushWorldDirty, updateConnectorStatus } from '../core/worldFrame';
 import { omitUndefined } from '../utils/omitUndefined';
 import type { MapConfig, ObstacleDefinition, PaintPalette, BackgroundTileDefinition, ColorTheme, GameConstants, MountainTriangles, LakeTriangles } from '../maps/types';
 import { buildColorTheme, diffColorTheme } from './colorTheme';
@@ -59,7 +60,8 @@ function stripLegacyConstants(constants: Partial<GameConstants>): Partial<GameCo
 export class MapDesigner {
   private webglRenderer: THREE.WebGLRenderer;
   private grid: Grid;
-  private renderer: Renderer;
+  /** Assign-once: nothing replaces the renderer any more. See `rebuildObstacles`. */
+  private readonly renderer: Renderer;
   private roadSystem: RoadSystem;
   private spawnSystem: SpawnSystem;
   private obstacleSystem: ObstacleSystem;
@@ -100,7 +102,6 @@ export class MapDesigner {
   blueprintVisible = false;
   blueprintOpacity = 0.5;
   private blueprintObjectUrl: string | null = null;
-  private blueprintImage: HTMLImageElement | null = null;
 
   // Callbacks
   onToolChange: (() => void) | null = null;
@@ -148,7 +149,7 @@ export class MapDesigner {
       () => this.spawnSystem.getHouses(),
       () => this.spawnSystem.getBusinesses(),
     );
-    this.renderer.buildObstacles(
+    this.renderer.rebuildTerrain(
       this.obstacleSystem.getMountainCells(),
       this.obstacleSystem.getLakeCells(),
       this.mountainTriangles,
@@ -313,23 +314,15 @@ export class MapDesigner {
       if (this.disposed || this.paused) return;
       this.roadDrawer.update();
       this.highwayDrawer.update();
-      if (this.roadSystem.isDirty) {
-        this.roadSystem.clearDirty();
-        this.renderer.markGroundDirty();
-      }
-      if (this.highwaySystem.isDirty) {
-        this.highwaySystem.clearDirty();
-        this.renderer.markHighwayDirty();
-      }
-      if (this.gasStationSystem.isDirty) {
-        this.gasStationSystem.clearDirty();
-        this.renderer.markGroundDirty();
-      }
-      // Update business connector status
-      for (const biz of this.spawnSystem.getBusinesses()) {
-        const cell = this.grid.getCell(biz.connectorPos.gx, biz.connectorPos.gy);
-        biz.connected = cell ? cell.roadConnections !== 0 : false;
-      }
+      // No pathfinder or cars: the designer places buildings but never simulates, so there
+      // is no route to invalidate.
+      flushWorldDirty({
+        grid: this.grid,
+        roadSystem: this.roadSystem,
+        highwaySystem: this.highwaySystem,
+        gasStationSystem: this.gasStationSystem,
+      }, this.renderer);
+      updateConnectorStatus(this.grid, this.spawnSystem.getBusinesses());
       this.renderer.updateIndicator(this.roadDrawer.getLastBuiltPos());
       const activeToolMapped = this.activeTool === DesignerTool.Highway ? Tool.Highway : Tool.Road;
       this.renderer.render(
@@ -596,14 +589,7 @@ export class MapDesigner {
     }
 
     if (cell.type === CellType.Mountain) {
-      this.grid.setCell(gx, gy, {
-        type: CellType.Empty,
-        entityId: null,
-        roadConnections: 0,
-        color: null,
-        connectorDir: null,
-        pendingDeletion: false,
-      });
+      this.grid.clearCell(gx, gy);
       const cells = this.obstacleSystem.getMountainCells();
       const idx = cells.findIndex(c => c.gx === gx && c.gy === gy);
       if (idx !== -1) cells.splice(idx, 1);
@@ -614,14 +600,7 @@ export class MapDesigner {
     }
 
     if (cell.type === CellType.Lake) {
-      this.grid.setCell(gx, gy, {
-        type: CellType.Empty,
-        entityId: null,
-        roadConnections: 0,
-        color: null,
-        connectorDir: null,
-        pendingDeletion: false,
-      });
+      this.grid.clearCell(gx, gy);
       const cells = this.obstacleSystem.getLakeCells();
       const idx = cells.findIndex(c => c.gx === gx && c.gy === gy);
       if (idx !== -1) cells.splice(idx, 1);
@@ -635,7 +614,7 @@ export class MapDesigner {
     // Find and remove a house
     const house = this.spawnSystem.getHouses().find(h => h.id === entityId);
     if (house) {
-      this.clearCell(house.pos.gx, house.pos.gy);
+      this.grid.clearCell(house.pos.gx, house.pos.gy);
       this.spawnSystem.removeHouse(entityId);
       this.roadSystem.markDirty();
       return;
@@ -644,24 +623,13 @@ export class MapDesigner {
     // Find and remove a business (4 cells)
     const business = this.spawnSystem.getBusinesses().find(b => b.id === entityId);
     if (business) {
-      this.clearCell(business.buildingPos.gx, business.buildingPos.gy);
-      this.clearCell(business.pinsPos.gx, business.pinsPos.gy);
-      this.clearCell(business.groundPlatePos.gx, business.groundPlatePos.gy);
+      this.grid.clearCell(business.buildingPos.gx, business.buildingPos.gy);
+      this.grid.clearCell(business.pinsPos.gx, business.pinsPos.gy);
+      this.grid.clearCell(business.groundPlatePos.gx, business.groundPlatePos.gy);
       this.clearConnectorCell(business.connectorPos.gx, business.connectorPos.gy);
       this.spawnSystem.removeBusiness(entityId);
       return;
     }
-  }
-
-  private clearCell(gx: number, gy: number): void {
-    this.grid.setCell(gx, gy, {
-      type: CellType.Empty,
-      entityId: null,
-      roadConnections: 0,
-      color: null,
-      connectorDir: null,
-      pendingDeletion: false,
-    });
   }
 
   private clearConnectorCell(gx: number, gy: number): void {
@@ -673,42 +641,27 @@ export class MapDesigner {
         neighbor.cell.roadConnections &= ~oppDir;
       }
     }
-    this.clearCell(gx, gy);
+    this.grid.clearCell(gx, gy);
     this.roadSystem.markDirty();
   }
 
 
+  /**
+   * Push the current mountain/lake state into the renderer. Runs on every brush stroke.
+   *
+   * This used to dispose the whole `Renderer` and build a new one, then replay camera state,
+   * paint, theme, size and blueprint onto it by hand — on the belief that the ground mesh
+   * needed regenerating for lake displacement. It does not: the ground is a flat quad and
+   * lakes show through alpha holes in its texture. The replay was also missing isometric
+   * mode, tilt and azimuth, so painting while tilted snapped the camera flat.
+   */
   private rebuildObstacles(): void {
-    // Save camera state before disposing renderer
-    const cameraState = this.renderer.getCameraState();
-
-    // Rebuild the 3D obstacle rendering
-    this.renderer.dispose();
-
-    // Re-create renderer to get fresh ground mesh for lake displacement
-    this.renderer = new Renderer(
-      this.webglRenderer,
-      this.grid,
-      () => this.spawnSystem.getHouses(),
-      () => this.spawnSystem.getBusinesses(),
-    );
-    this.renderer.setBackgroundTiles(this.backgroundTiles, this.colorTheme.paintPalette);
-    this.renderer.applyColorTheme(this.colorTheme);
-    this.renderer.buildObstacles(
+    this.renderer.rebuildTerrain(
       this.obstacleSystem.getMountainCells(),
       this.obstacleSystem.getLakeCells(),
       this.mountainTriangles,
       this.lakeTriangles,
     );
-    this.renderer.resize(window.innerWidth, window.innerHeight);
-    this.renderer.setCameraState(cameraState);
-
-    // Restore blueprint image if one was loaded
-    if (this.blueprintImage) {
-      this.renderer.setBlueprintImage(this.blueprintImage);
-      this.renderer.setBlueprintVisible(this.blueprintVisible);
-      this.renderer.setBlueprintOpacity(this.blueprintOpacity);
-    }
   }
 
   setBlueprintImage(file: File): void {
@@ -717,7 +670,6 @@ export class MapDesigner {
     this.blueprintObjectUrl = url;
     const img = new Image();
     img.onload = () => {
-      this.blueprintImage = img;
       this.renderer.setBlueprintImage(img);
       this.renderer.setBlueprintOpacity(this.blueprintOpacity);
       this.blueprintVisible = true;
@@ -743,7 +695,6 @@ export class MapDesigner {
       URL.revokeObjectURL(this.blueprintObjectUrl);
       this.blueprintObjectUrl = null;
     }
-    this.blueprintImage = null;
     this.blueprintVisible = false;
     this.onBlueprintChange?.();
   }
@@ -894,7 +845,9 @@ export class MapDesigner {
       this.obstacleSystem.generate();
       this.mountainTriangles = this.obstacleSystem.getMountainTriangles();
       this.lakeTriangles = this.obstacleSystem.getLakeTriangles();
-      this.rebuildObstacles();
+      // Terrain meshes are built further down, after the map's colour theme has been
+      // applied: the mountain and water colours are baked in at build time, so building
+      // here would use the outgoing map's palette.
     }
 
     applyMapConfig(config, {
@@ -919,6 +872,9 @@ export class MapDesigner {
       this.colorTheme = buildColorTheme(overrides);
       this.renderer.applyColorTheme(this.colorTheme);
     }
+
+    // Now that the theme is in place, build the terrain meshes with its colours.
+    if (config.obstacles) this.rebuildObstacles();
 
     // Load background tiles
     if (config.backgroundTiles) {

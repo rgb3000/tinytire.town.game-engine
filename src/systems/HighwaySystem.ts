@@ -26,6 +26,18 @@ export class HighwaySystem {
     return highway;
   }
 
+  /**
+   * Put a previously removed highway back, keeping its original id and geometry.
+   *
+   * The stored `Highway` already carries its sampled polyline and cumulative distances, so
+   * this re-inserts rather than re-deriving: `addHighway` would mint a fresh id, which any
+   * `PathStep` still referencing the old one would no longer resolve.
+   */
+  restore(highway: Highway): void {
+    this.highways.set(highway.id, highway);
+    this.isDirty = true;
+  }
+
   removeHighway(id: string): boolean {
     const removed = this.highways.delete(id);
     if (removed) this.isDirty = true;

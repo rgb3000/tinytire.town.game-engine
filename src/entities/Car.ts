@@ -92,12 +92,52 @@ export class Car {
   }
 
   /**
+   * Forget the route this car was following: the path, its smoothed geometry, the highway
+   * it may have been on, and everything derived from progress along it.
+   *
+   * This is the set `CarRouter.assignPath` has always cleared before installing a new path,
+   * which is what makes it the right unit — every other site that cleared "the path stuff"
+   * (stranding in `CarRouter`, arriving at and leaving a gas station in
+   * `CarRefuelingManager`) was clearing a different subset of it by hand, and the smaller
+   * subsets only worked because the next `assignPath` happened to finish the job.
+   *
+   * Deliberately *not* included: `intersectionWaitTime`, `wasBlocked`, `arrivalTime` and
+   * position. Those are traffic and placement state rather than route state, and
+   * `assignPath` has never touched them — folding them in here would change how a car
+   * rejoins an intersection queue after a reroute.
+   */
+  clearPathState(): void {
+    this.path = [];
+    this.pathIndex = 0;
+    this.segmentProgress = 0;
+
+    this.smoothPath = [];
+    this.smoothCumDist = [];
+    this.smoothCellDist = [];
+
+    this.onHighway = false;
+    this.highwayPolyline = null;
+    this.highwayCumDist = null;
+    this.highwayProgress = 0;
+
+    this.sameLaneWaitTime = 0;
+    this.stuckTimer = 0;
+    this.lastAdvancedPathIndex = 0;
+    this.arcDistance = 0;
+    this.currentSpeed = 0;
+    this.leaderId = null;
+    this.leaderGap = Infinity;
+  }
+
+  /**
    * Reset all driving state back to idle defaults.
    *
    * Deliberately does *not* touch `fuel` — a car that reaches home keeps whatever is left in
    * the tank and must still visit a gas station. (This comment used to claim it refuelled.)
    */
   resetToIdle(homePos: GridPos): void {
+    this.clearPathState();
+
     this.state = CarState.Idle;
     this.targetBusinessId = null;
     this.destination = null;
@@ -105,32 +145,13 @@ export class Car {
     this.renderAngle = 0;
     this.prevRenderAngle = 0;
 
-    this.path = [];
-    this.pathIndex = 0;
     this.outboundPath = [];
-    this.segmentProgress = 0;
     this.intersectionWaitTime = 0;
-    this.sameLaneWaitTime = 0;
-    this.stuckTimer = 0;
-    this.lastAdvancedPathIndex = 0;
     this.wasBlocked = false;
-
-    this.smoothPath = [];
-    this.smoothCumDist = [];
-    this.smoothCellDist = [];
-
-    this.arcDistance = 0;
-    this.currentSpeed = 0;
-    this.leaderId = null;
-    this.leaderGap = Infinity;
     this.arrivalTime = 0;
 
-    this.onHighway = false;
     this.elevationY = 0;
     this.prevElevationY = 0;
-    this.highwayPolyline = null;
-    this.highwayCumDist = null;
-    this.highwayProgress = 0;
 
     this.unloadTimer = 0;
 

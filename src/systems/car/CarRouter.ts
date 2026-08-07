@@ -7,6 +7,7 @@ import { CellType } from '../../types';
 import type { GridPos } from '../../types';
 import type { PathStep } from '../../highways/types';
 import { gridToPixelCenter, pixelToGrid } from '../../utils/math';
+import { getDirection, directionAngle } from '../../utils/direction';
 import { computeSmoothLanePath } from '../../utils/roadGeometry';
 import type { GasStationSystem } from '../GasStationSystem';
 import { CAR_DEBUG } from '../../constants';
@@ -59,20 +60,8 @@ export class CarRouter {
   }
 
   assignPath(car: Car, path: PathStep[]): void {
+    car.clearPathState();
     car.path = path;
-    car.pathIndex = 0;
-    car.segmentProgress = 0;
-    car.onHighway = false;
-    car.highwayPolyline = null;
-    car.highwayCumDist = null;
-    car.highwayProgress = 0;
-    car.sameLaneWaitTime = 0;
-    car.stuckTimer = 0;
-    car.lastAdvancedPathIndex = 0;
-    car.arcDistance = 0;
-    car.currentSpeed = 0;
-    car.leaderId = null;
-    car.leaderGap = Infinity;
 
     if (path.length >= 2) {
       const gridPositions = this.extractLeadingGridPositions(path, 0);
@@ -81,6 +70,30 @@ export class CarRouter {
       car.smoothPath = [];
       car.smoothCumDist = [];
       car.smoothCellDist = [];
+    }
+  }
+
+  /**
+   * Place a car at the head of the path it was just given, facing along it.
+   *
+   * For a car that is *starting* a journey rather than continuing one — leaving its house,
+   * or pulling out of a gas station — so it appears on the lane centre instead of the tile
+   * centre. Contrast {@link reassignPath}, which keeps a moving car where it is and finds
+   * that point on the new path.
+   *
+   * Lived twice: once privately in `CarRefuelingManager` and once copied verbatim into
+   * `CarDispatcher`.
+   */
+  snapToPathStart(car: Car, path: PathStep[]): void {
+    if (car.smoothPath.length < 2) return;
+    car.pixelPos.x = car.smoothPath[0].x;
+    car.pixelPos.y = car.smoothPath[0].y;
+    car.prevPixelPos.x = car.pixelPos.x;
+    car.prevPixelPos.y = car.pixelPos.y;
+    if (path.length >= 2) {
+      const initDir = getDirection(stepGridPos(path[0]), stepGridPos(path[1]));
+      car.renderAngle = directionAngle(initDir);
+      car.prevRenderAngle = car.renderAngle;
     }
   }
 
@@ -197,20 +210,9 @@ export class CarRouter {
 
     if (CAR_DEBUG) CarEventLog.log({ time: this.elapsedTime, carId: car.id, type: 'reroute-stranded', message: `no path found, teleporting to tile center (${currentTile.gx},${currentTile.gy})` });
     car.state = CarState.Stranded;
-    car.path = [];
-    car.pathIndex = 0;
-    car.segmentProgress = 0;
-    car.onHighway = false;
-    car.highwayPolyline = null;
-    car.highwayCumDist = null;
-    car.highwayProgress = 0;
-    car.smoothPath = [];
-    car.smoothCumDist = [];
-    car.smoothCellDist = [];
-    car.arcDistance = 0;
-    car.currentSpeed = 0;
-    car.leaderId = null;
-    car.leaderGap = Infinity;
+    car.clearPathState();
+    // The teleport stays here rather than moving into `clearPathState`: dropping the route
+    // and snapping to a tile centre are different decisions, and only this path wants both.
     const center = gridToPixelCenter(currentTile);
     car.pixelPos.x = center.x;
     car.pixelPos.y = center.y;
