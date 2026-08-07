@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Inline so the dev server does not log a 404 for a file that does not exist. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%F0%9F%9A%97</text></svg>"
+    />
+    <title>@tinytire/engine — playground</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <!-- The canvas fills the window and the panels sit on top of it. This is not a
+         stylistic choice: Game, MapDesigner and Renderer all size themselves from
+         window.innerWidth/innerHeight rather than the canvas's own client rect, so a
+         canvas laid out beside a sidebar renders at the wrong scale. -->
+    <div id="canvas-host"></div>
+
+    <header id="topbar">
+      <span class="brand">@tinytire/engine</span>
+      <div class="modes" id="modes">
+        <button type="button" data-mode="play">Play</button>
+        <button type="button" data-mode="design">Design</button>
+      </div>
+      <label class="field">
+        Map
+        <select id="map-picker"></select>
+      </label>
+      <button type="button" id="reload">Restart</button>
+    </header>
+
+    <aside id="panel"></aside>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

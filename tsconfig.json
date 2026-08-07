@@ -1,0 +1,54 @@
+{
+  /* KEEP IN SYNC with the tsconfig of any consumer that imports this package.
+     The package ships raw TypeScript rather than compiled `.d.ts`, so `skipLibCheck`
+     does not apply to it: a consumer's own `tsc --noEmit` type-checks these sources
+     under *its* compiler options. If the strictness flags below drift apart, the
+     consumer's typecheck breaks on code that is clean here. That coupling is the
+     price of having no build step, and it is worth it — the cross-repo checking is
+     real rather than a stale generated artifact. */
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    /* `bundler`, not `nodenext`: every internal import is extensionless. See the
+       "Consuming this package" section of the README. */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    /* Distinguishes "property absent" from "property present and undefined". Load-
+       bearing wherever a partial is spread over defaults: `{...DEFAULTS, ...overrides}`
+       copies an explicit `undefined` and destroys the default. See
+       `src/utils/omitUndefined.ts`. Not paired with `noUncheckedIndexedAccess`, which
+       costs ~600 errors in the geometry and car hot loops for little gain. */
+    "exactOptionalPropertyTypes": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": false,
+    "skipLibCheck": true,
+    "incremental": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "demo/**/*.ts",
+    "*.config.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

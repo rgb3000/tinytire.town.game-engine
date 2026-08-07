@@ -1,0 +1,882 @@
+{
+  "id": "lakeland",
+  "name": "Lakeland",
+  "description": "Lakes everywhere, no mountains. Extra starting roads to compensate.",
+  "obstacles": [
+    {
+      "gx": 11,
+      "gy": 5,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 5,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 5,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 6,
+      "type": "lake"
+    },
+    {
+      "gx": 11,
+      "gy": 6,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 6,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 6,
+      "type": "lake"
+    },
+    {
+      "gx": 14,
+      "gy": 6,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 11,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 14,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 15,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 11,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 14,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 15,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 11,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 14,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 15,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 11,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 14,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 11,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 12,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 13,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 7,
+      "type": "lake"
+    },
+    {
+      "gx": 53,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 8,
+      "type": "lake"
+    },
+    {
+      "gx": 52,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 53,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 9,
+      "type": "lake"
+    },
+    {
+      "gx": 52,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 53,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 10,
+      "type": "lake"
+    },
+    {
+      "gx": 52,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 53,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 11,
+      "type": "lake"
+    },
+    {
+      "gx": 53,
+      "gy": 12,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 12,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 12,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 12,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 12,
+      "type": "lake"
+    },
+    {
+      "gx": 54,
+      "gy": 13,
+      "type": "lake"
+    },
+    {
+      "gx": 55,
+      "gy": 13,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 13,
+      "type": "lake"
+    },
+    {
+      "gx": 7,
+      "gy": 26,
+      "type": "lake"
+    },
+    {
+      "gx": 8,
+      "gy": 26,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 26,
+      "type": "lake"
+    },
+    {
+      "gx": 6,
+      "gy": 27,
+      "type": "lake"
+    },
+    {
+      "gx": 7,
+      "gy": 27,
+      "type": "lake"
+    },
+    {
+      "gx": 8,
+      "gy": 27,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 27,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 27,
+      "type": "lake"
+    },
+    {
+      "gx": 6,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 7,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 8,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 6,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 7,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 8,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 10,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 7,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 8,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 9,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 33,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 37,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 32,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 33,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 37,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 38,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 32,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 33,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 37,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 38,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 32,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 33,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 37,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 38,
+      "gy": 33,
+      "type": "lake"
+    },
+    {
+      "gx": 33,
+      "gy": 34,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 34,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 34,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 34,
+      "type": "lake"
+    },
+    {
+      "gx": 37,
+      "gy": 34,
+      "type": "lake"
+    },
+    {
+      "gx": 34,
+      "gy": 35,
+      "type": "lake"
+    },
+    {
+      "gx": 35,
+      "gy": 35,
+      "type": "lake"
+    },
+    {
+      "gx": 36,
+      "gy": 35,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 59,
+      "gy": 28,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 59,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 60,
+      "gy": 29,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 59,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 60,
+      "gy": 30,
+      "type": "lake"
+    },
+    {
+      "gx": 56,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 59,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 60,
+      "gy": 31,
+      "type": "lake"
+    },
+    {
+      "gx": 57,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 58,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 59,
+      "gy": 32,
+      "type": "lake"
+    },
+    {
+      "gx": 27,
+      "gy": 13,
+      "type": "lake"
+    },
+    {
+      "gx": 28,
+      "gy": 13,
+      "type": "lake"
+    },
+    {
+      "gx": 29,
+      "gy": 13,
+      "type": "lake"
+    },
+    {
+      "gx": 26,
+      "gy": 14,
+      "type": "lake"
+    },
+    {
+      "gx": 27,
+      "gy": 14,
+      "type": "lake"
+    },
+    {
+      "gx": 28,
+      "gy": 14,
+      "type": "lake"
+    },
+    {
+      "gx": 29,
+      "gy": 14,
+      "type": "lake"
+    },
+    {
+      "gx": 30,
+      "gy": 14,
+      "type": "lake"
+    },
+    {
+      "gx": 26,
+      "gy": 15,
+      "type": "lake"
+    },
+    {
+      "gx": 27,
+      "gy": 15,
+      "type": "lake"
+    },
+    {
+      "gx": 28,
+      "gy": 15,
+      "type": "lake"
+    },
+    {
+      "gx": 29,
+      "gy": 15,
+      "type": "lake"
+    },
+    {
+      "gx": 30,
+      "gy": 15,
+      "type": "lake"
+    },
+    {
+      "gx": 26,
+      "gy": 16,
+      "type": "lake"
+    },
+    {
+      "gx": 27,
+      "gy": 16,
+      "type": "lake"
+    },
+    {
+      "gx": 28,
+      "gy": 16,
+      "type": "lake"
+    },
+    {
+      "gx": 29,
+      "gy": 16,
+      "type": "lake"
+    },
+    {
+      "gx": 30,
+      "gy": 16,
+      "type": "lake"
+    },
+    {
+      "gx": 27,
+      "gy": 17,
+      "type": "lake"
+    },
+    {
+      "gx": 28,
+      "gy": 17,
+      "type": "lake"
+    },
+    {
+      "gx": 29,
+      "gy": 17,
+      "type": "lake"
+    }
+  ],
+  "constants": {
+    "STARTING_ROADS": 50,
+    "MOUNTAIN_CLUSTER_COUNT": 0,
+    "LAKE_CLUSTER_COUNT": 0
+  }
+}

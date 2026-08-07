@@ -1,0 +1,49 @@
+{
+  "name": "@tinytire/engine",
+  "version": "0.1.0",
+  "description": "The game engine behind TinyTire.town — draw roads, connect colour-matched houses to businesses, keep the cars moving. Three.js rendering, A* pathfinding, procedural audio.",
+  "keywords": [
+    "game-engine",
+    "threejs",
+    "pathfinding",
+    "traffic-simulation",
+    "mini-motorways"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rgb3000/tinytire.town.game-engine.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build:demo": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "three": "^0.185.1",
+    "tone": "^15.1.22"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.185.4",
+    "oxlint": "^1.77.0",
+    "three": "^0.185.1",
+    "tone": "^15.1.22",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,750 @@
+{
+  "id": "narrow-pass",
+  "name": "Narrow Pass",
+  "description": "A mountain wall splits the map. One gap to connect both sides.",
+  "obstacles": [
+    {
+      "gx": 39,
+      "gy": 2,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 2,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 2,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 3,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 3,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 3,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 4,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 4,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 4,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 5,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 5,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 5,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 6,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 6,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 6,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 7,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 7,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 7,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 8,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 8,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 8,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 9,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 9,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 9,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 10,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 10,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 10,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 11,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 11,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 11,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 12,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 12,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 12,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 13,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 13,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 13,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 14,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 14,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 14,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 15,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 15,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 15,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 16,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 16,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 16,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 17,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 17,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 17,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 18,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 18,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 18,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 19,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 19,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 19,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 20,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 20,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 20,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 21,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 21,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 21,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 22,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 22,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 22,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 28,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 28,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 28,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 29,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 29,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 29,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 30,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 30,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 30,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 31,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 31,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 31,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 32,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 32,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 32,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 33,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 33,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 33,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 34,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 34,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 34,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 35,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 35,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 35,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 36,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 36,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 36,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 37,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 37,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 37,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 38,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 38,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 38,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 39,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 39,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 39,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 40,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 40,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 40,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 41,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 41,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 41,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 42,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 42,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 42,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 43,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 43,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 43,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 44,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 44,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 44,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 45,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 45,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 45,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 46,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 46,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 46,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 39,
+      "gy": 47,
+      "type": "mountain",
+      "height": 8
+    },
+    {
+      "gx": 40,
+      "gy": 47,
+      "type": "mountain",
+      "height": 10
+    },
+    {
+      "gx": 41,
+      "gy": 47,
+      "type": "mountain",
+      "height": 8
+    }
+  ],
+  "constants": {
+    "DEMAND_RATE_GROWTH": 0.4,
+    "MOUNTAIN_CLUSTER_COUNT": 0,
+    "LAKE_CLUSTER_COUNT": 0
+  }
+}

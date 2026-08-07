@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // oxlint rather than ESLint: it parses TypeScript itself and has no `typescript`
+  // peer dependency, so it keeps working across TypeScript major upgrades.
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": [
+    "dist-demo/**"
+  ],
+  "rules": {
+    "unicorn/filename-case": "off",
+    // TypeScript's own `noUnusedLocals` already covers this and understands the
+    // `_`-prefixed destructuring used to drop fields.
+    "typescript/no-unused-vars": "off",
+    // `_privateCache` is a deliberate convention for reused per-frame collections.
+    "eslint/no-underscore-dangle": "off",
+    // Not in the `correctness` category, so it has to be named explicitly. `any`
+    // disables checking silently and spreads through inference; `unknown` plus a
+    // narrowing step is always available instead.
+    "typescript/no-explicit-any": "error",
+    // `new Array(n)` is deliberate preallocation in the pathfinding and geometry
+    // hot loops; the suggested `Array.from({length: n})` allocates an iterator and
+    // is measurably slower there.
+    "unicorn/no-new-array": "off"
+  }
+}
