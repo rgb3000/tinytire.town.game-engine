@@ -25,7 +25,6 @@ export const CAR_WIDTH = TILE_SIZE * 0.12;       // px (narrow dimension, perpen
 export const CAR_LENGTH = TILE_SIZE * 0.3;      // px (long dimension, along travel direction)
 export const INTERSECTION_SPEED_MULTIPLIER = 0.7;
 export const INTERSECTION_DEADLOCK_TIMEOUT = 2.0; // seconds
-export const SAME_LANE_DEADLOCK_TIMEOUT = 5.0; // seconds (safety net only, arc-length following handles normal cases)
 
 // Arc-length following distance
 export const CAR_MIN_GAP = TILE_SIZE * 0.4;          // ~20px minimum bumper gap
@@ -37,9 +36,7 @@ export const INTERSECTION_DECEL_DIST = TILE_SIZE * 2.0;  // start decelerating d
 
 // T-intersection gap acceptance
 export const T_INTERSECTION_GAP_TIME = 2.0;  // seconds of clear gap needed on major road
-export const PARKING_WAIT_TIMEOUT = 4.0; // seconds
 export const UNIVERSAL_STUCK_TIMEOUT = 8.0; // seconds
-export const BEZIER_KAPPA = 0.5522847498; // 4*(√2-1)/3, quarter-circle Bezier approximation
 
 // Unloading
 export const UNLOAD_TIME = 1; // seconds
@@ -148,20 +145,11 @@ export const ROAD_DEBUG = false;
 export const ROAD_GRAPH_DEBUG = false;
 export const CAR_DEBUG = false;
 
-// Business layout dimensions
-export const BIZ_PIN_SPACING = 8;          // px between pin centers
-
 // Roads
 export const ROAD_HALF_WIDTH = TILE_SIZE * 0.2;
 export const HIGHWAY_HALF_WIDTH = ROAD_HALF_WIDTH;
-export const HIGHWAY_SURFACE_Y = 0.5;
 export const HIGHWAY_COLOR_HEX = 0x8899AA;
 export const ROAD_COLOR = '#555';
-export const ROAD_OUTLINE_COLOR = '#C0C0C0';
-export const ROAD_LANE_DIVIDER_COLOR = '#DDDDDD';
-export const ROAD_CORNER_RADIUS = 3.0; // px
-export const UI_TEXT_COLOR = '#333333';
-export const GAME_OVER_OVERLAY = 'rgba(0, 0, 0, 0.6)';
 
 export const GROUND_Y_POSITION = 1.75;
 

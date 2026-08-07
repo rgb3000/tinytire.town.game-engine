@@ -69,10 +69,6 @@ export function createPlateMat(): { mat: THREE.MeshStandardMaterial; tex: THREE.
   return { mat, tex };
 }
 
-export function createSlotLineMat(): THREE.LineBasicMaterial {
-  return new THREE.LineBasicMaterial({ color: '#666666' });
-}
-
 export function getPlateGeom(
   cache: Map<string, THREE.ExtrudeGeometry>,
   width: number,
@@ -99,22 +95,6 @@ export function addGroundPlate(
   plate.castShadow = true;
   plate.receiveShadow = true;
   group.add(plate);
-}
-
-export function addParkingSlotOutlines(
-  group: THREE.Group,
-  slots: { width: number; depth: number; centerX: number; centerZ: number }[],
-  slotLineMat: THREE.LineBasicMaterial,
-): void {
-  const outlineY = 0.01 + 0.8 + 0.6 + 0.05;
-  for (const slot of slots) {
-    const slotBoxGeom = new THREE.BoxGeometry(slot.width * 0.9, 0.01, slot.depth * 0.9);
-    const slotEdgeGeom = new THREE.EdgesGeometry(slotBoxGeom);
-    slotBoxGeom.dispose();
-    const outline = new THREE.LineSegments(slotEdgeGeom, slotLineMat);
-    outline.position.set(slot.centerX, outlineY, slot.centerZ);
-    group.add(outline);
-  }
 }
 
 export function disposeGroup(

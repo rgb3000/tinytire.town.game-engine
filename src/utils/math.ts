@@ -1,4 +1,4 @@
-import type { GridPos, PixelPos, Direction } from '../types';
+import type { GridPos, PixelPos } from '../types';
 import { TILE_SIZE } from '../constants';
 
 let nextId = 0;
@@ -23,10 +23,6 @@ export function octileDist(a: GridPos, b: GridPos): number {
   const dx = Math.abs(a.gx - b.gx);
   const dy = Math.abs(a.gy - b.gy);
   return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
-}
-
-export function isDiagonal(dir: Direction): boolean {
-  return (dir & 0xF0) !== 0;
 }
 
 export function gridToPixelCenter(pos: GridPos): PixelPos {
@@ -90,13 +86,3 @@ export function cubicBezier(
   };
 }
 
-export function cubicBezierTangent(
-  p0x: number, p0y: number, p1x: number, p1y: number,
-  p2x: number, p2y: number, p3x: number, p3y: number, t: number,
-): { x: number; y: number } {
-  const u = 1 - t;
-  return {
-    x: 3 * u * u * (p1x - p0x) + 6 * u * t * (p2x - p1x) + 3 * t * t * (p3x - p2x),
-    y: 3 * u * u * (p1y - p0y) + 6 * u * t * (p2y - p1y) + 3 * t * t * (p3y - p2y),
-  };
-}

@@ -27,11 +27,6 @@ export function followingSpeedMultiplier(gap: number): number {
   return (gap - CAR_MIN_GAP) / (CAR_COMFORT_GAP - CAR_MIN_GAP);
 }
 
-export function isIntersection(grid: Grid, gx: number, gy: number): boolean {
-  const cell = grid.getCell(gx, gy);
-  return cell !== null && cell._isIntersection;
-}
-
 export function isTIntersection(grid: Grid, gx: number, gy: number): boolean {
   const cell = grid.getCell(gx, gy);
   return cell !== null && cell._isTIntersection;
