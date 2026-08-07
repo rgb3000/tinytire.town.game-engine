@@ -18,20 +18,23 @@
          canvas laid out beside a sidebar renders at the wrong scale. -->
     <div id="canvas-host"></div>
 
-    <header id="topbar">
-      <span class="brand">@tinytire/engine</span>
-      <div class="modes" id="modes">
-        <button type="button" data-mode="play">Play</button>
-        <button type="button" data-mode="design">Design</button>
-      </div>
-      <label class="field">
-        Map
-        <select id="map-picker"></select>
-      </label>
-      <button type="button" id="reload">Restart</button>
-    </header>
+    <!-- Every cluster below is transparent to the pointer; only the control surfaces
+         inside them take clicks, so the board stays drawable in all the gaps. The
+         rule lives in style.css under "pointer transparency". -->
+    <div id="chrome">
+      <header id="topbar"></header>
+      <div id="hud-stats"></div>
+      <div id="hud-demand"></div>
+      <div id="dock"></div>
+      <div id="utility"></div>
+      <aside id="panel"></aside>
+    </div>
 
-    <aside id="panel"></aside>
+    <!-- Blocking cards: start, game over. -->
+    <div id="overlay"></div>
+    <!-- Non-blocking card: the weekly bonus. Roads can still be drawn while it is up,
+         because the engine keeps the road drawer running during that pause. -->
+    <div id="toast"></div>
 
     <script type="module" src="./main.ts"></script>
   </body>

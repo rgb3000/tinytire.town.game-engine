@@ -1,25 +1,57 @@
 import { Game, MapDesigner, allMaps, type MapConfig } from '../src/index';
 import { mountPlayPanel } from './playPanel';
 import { mountDesignPanel } from './designPanel';
-import { setPressed } from './ui';
+import { el, pill, setPressed } from './ui';
 
 type Mode = 'play' | 'design';
 
 const BLANK = '__blank__';
 
 const host = document.querySelector<HTMLDivElement>('#canvas-host')!;
+const topbar = document.querySelector<HTMLElement>('#topbar')!;
 const panel = document.querySelector<HTMLElement>('#panel')!;
-const picker = document.querySelector<HTMLSelectElement>('#map-picker')!;
-const reload = document.querySelector<HTMLButtonElement>('#reload')!;
-const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 
 let mode: Mode = 'play';
 let mapId: string = allMaps[0].id;
 let teardown: (() => void) | null = null;
 
+// --- topbar ----------------------------------------------------------------
+// Three separate pills rather than one edge-to-edge bar: it reads better, and it
+// is why the whole top of the board stays drawable — only the pills take clicks.
+
+const modeButtons: HTMLButtonElement[] = (['play', 'design'] as const).map((value) => {
+  const button = el('button', {
+    type: 'button',
+    textContent: value === 'play' ? 'Play' : 'Design',
+  });
+  button.setAttribute('aria-pressed', String(value === mode));
+  button.addEventListener('click', () => {
+    if (value === mode) return;
+    mode = value;
+    mount();
+  });
+  return button;
+});
+
+const picker = el('select', { id: 'map-picker' });
 for (const map of allMaps) picker.append(new Option(map.name, map.id));
 picker.append(new Option('Blank canvas', BLANK));
 picker.value = mapId;
+picker.addEventListener('change', () => {
+  mapId = picker.value;
+  mount();
+});
+
+topbar.append(
+  pill(
+    'brand',
+    el('span', { className: 'mark', textContent: '🚗' }),
+    'tinytire',
+    el('span', { className: 'sub', textContent: '/engine' }),
+  ),
+  pill('', el('div', { className: 'segmented' }, modeButtons)),
+  pill('', el('span', { className: 'field', textContent: 'Map' }), picker),
+);
 
 function selectedMap(): MapConfig | undefined {
   return allMaps.find((m) => m.id === mapId);
@@ -45,7 +77,10 @@ function mount(): void {
     const map = selectedMap();
     const game = new Game(canvas, map);
     game.start();
-    const unmountPanel = mountPlayPanel(game, panel);
+    const unmountPanel = mountPlayPanel(game, map, {
+      onRestart: mount,
+      onChangeMap: () => picker.focus(),
+    });
     teardown = () => {
       unmountPanel();
       game.dispose();
@@ -57,31 +92,14 @@ function mount(): void {
     const map = selectedMap();
     if (map) designer.loadMapConfig(map);
     designer.start();
-    const unmountPanel = mountDesignPanel(designer, panel);
+    const unmountPanel = mountDesignPanel(designer, panel, mount);
     teardown = () => {
       unmountPanel();
       designer.dispose();
     };
   }
 
-  for (const button of modeButtons) setPressed(button, button.dataset.mode === mode);
+  for (const [i, button] of modeButtons.entries()) setPressed(button, i === (mode === 'play' ? 0 : 1));
 }
-
-for (const button of modeButtons) {
-  button.addEventListener('click', () => {
-    const next = button.dataset.mode;
-    if (next !== 'play' && next !== 'design') return;
-    if (next === mode) return;
-    mode = next;
-    mount();
-  });
-}
-
-picker.addEventListener('change', () => {
-  mapId = picker.value;
-  mount();
-});
-
-reload.addEventListener('click', mount);
 
 mount();

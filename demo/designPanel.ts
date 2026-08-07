@@ -61,8 +61,15 @@ const TUNABLE: (keyof GameConstants)[] = [
  * The designer owns its own pointer input — placement, road dragging, panning and the
  * keyboard shortcuts are all handled inside the engine. This panel only sets the mode
  * the input runs in, and reads back through `onToolChange`.
+ *
+ * Unlike the play HUD this stays a docked sidebar: it is a dense tool panel and the
+ * density is the point. It collapses, so the strip of board underneath can be reached.
  */
-export function mountDesignPanel(designer: MapDesigner, root: HTMLElement): () => void {
+export function mountDesignPanel(
+  designer: MapDesigner,
+  root: HTMLElement,
+  onReset: () => void,
+): () => void {
   const toolButtons = TOOLS.map(([tool, label, key]) => {
     const button = toggle(label, () => designer.setTool(tool));
     button.append(el('kbd', { textContent: ` ${key}` }));
@@ -95,7 +102,6 @@ export function mountDesignPanel(designer: MapDesigner, root: HTMLElement): () =
     const input = el('input', {
       type: 'number',
       value: String(designer.constantsOverrides[key] ?? DEFAULT_GAME_CONSTANTS[key]),
-      style: 'inline-size:5.5rem',
     });
     input.addEventListener('change', () => {
       const parsed = Number(input.value);
@@ -108,7 +114,7 @@ export function mountDesignPanel(designer: MapDesigner, root: HTMLElement): () =
       }
       designer.constantsOverrides[key] = parsed;
     });
-    return el('label', { className: 'field', style: 'justify-content:space-between' }, [key, input]);
+    return el('label', { className: 'const-field' }, [key, input]);
   });
 
   const exportButton = el('button', { type: 'button', textContent: 'Export JSON' });
@@ -123,13 +129,31 @@ export function mountDesignPanel(designer: MapDesigner, root: HTMLElement): () =
     console.log(JSON.parse(designer.exportConfig()));
   });
 
+  const resetButton = el('button', { type: 'button', textContent: 'Reset', title: 'Reload this map' });
+  resetButton.addEventListener('click', onReset);
+
+  const collapseButton = el('button', { type: 'button', textContent: '▾', title: 'Collapse panel' });
+  collapseButton.setAttribute('aria-label', 'Collapse panel');
+  collapseButton.addEventListener('click', () => {
+    const collapsed = root.dataset.collapsed === 'true';
+    root.dataset.collapsed = String(!collapsed);
+    collapseButton.textContent = collapsed ? '▾' : '▸';
+    collapseButton.title = collapsed ? 'Collapse panel' : 'Expand panel';
+  });
+
   root.append(
+    el('div', { className: 'panel-head' }, [
+      'Designer',
+      el('div', { className: 'row' }, [resetButton, collapseButton]),
+    ]),
     section('Tool', row(...toolButtons)),
     section('Colour', row(...colorButtons), row(rotationButton)),
     section('Theme', row(...THEME_FIELDS.map(([key, label]) =>
       colorField(label, designer.colorTheme[key], (hex) => designer.updateThemeField(key, hex)),
     ))),
-    section('Constants', ...constantFields),
+    el('section', {}, [
+      el('details', {}, [el('summary', { textContent: 'Constants' }), ...constantFields]),
+    ]),
     section('View', row(isoButton)),
     section('Export', row(exportButton, logButton)),
     section(
@@ -159,6 +183,7 @@ export function mountDesignPanel(designer: MapDesigner, root: HTMLElement): () =
 
   return () => {
     designer.onToolChange = null;
+    delete root.dataset.collapsed;
     root.replaceChildren();
   };
 }

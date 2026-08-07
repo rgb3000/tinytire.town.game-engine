@@ -6,6 +6,7 @@ import { Grid } from './Grid';
 import { GameLoop } from './GameLoop';
 import { Renderer } from '../rendering/Renderer';
 import { InputHandler } from '../input/InputHandler';
+import { isTypingTarget } from '../input/keyboardTarget';
 import { RoadDrawer } from '../input/RoadDrawer';
 import type { InventorySlot } from '../input/RoadDrawer';
 import { UndoSystem } from '../input/UndoSystem';
@@ -24,7 +25,7 @@ import { GasStationPlacer } from '../input/GasStationPlacer';
 import { GasStationSystem } from '../systems/GasStationSystem';
 import { CarState } from '../entities/Car';
 import { stepGridPos } from '../systems/car/CarRouter';
-import { SPAWN_DEBUG, DEMAND_DEBUG, CAR_DEBUG, TILE_SIZE, buildConfig } from '../constants';
+import { SPAWN_DEBUG, CAR_DEBUG, TILE_SIZE, buildConfig } from '../constants';
 import { CarEventLog } from '../debug/CarEventLog';
 import type { Car } from '../entities/Car';
 import type { MapConfig, Inventory, WeeklyChoiceOption } from '../maps/types';
@@ -132,6 +133,9 @@ export class Game {
 
     // Keyboard zoom + pause + tool shortcuts + space panning
     this.keydownHandler = (e: KeyboardEvent) => {
+      // These are window-level, so a host's own form controls would otherwise
+      // swallow-and-act on every keystroke typed into them.
+      if (isTypingTarget(e.target)) return;
       if (e.key === '+' || e.key === '=') this.renderer.zoomByKey(1);
       if (e.key === '-') this.renderer.zoomByKey(-1);
       if (e.key === 'Escape' || e.key === 'p') this.togglePause();
@@ -156,6 +160,7 @@ export class Game {
     window.addEventListener('keydown', this.keydownHandler);
 
     this.keyupHandler = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
       if (e.key === ' ') {
         this.spaceDown = false;
         this.isPanning = false;
@@ -733,18 +738,29 @@ export class Game {
       this.highwayDrawer.getPlacementState(),
       this.gasStationSystem.getGasStations(),
     );
-    let demandStats: DemandStat[] | null = null;
-    if (DEMAND_DEBUG) {
-      const colorDemands = this.demandSystem.getColorDemands();
-      demandStats = this.spawnSystem.getUnlockedColors().map(color => ({
+    // Counted in one pass per array rather than a `filter` per colour per frame:
+    // this runs on every rendered frame, and the filtering version walked the house
+    // and business lists four times for each unlocked colour.
+    const houseCounts = new Map<GameColor, number>();
+    for (const house of this.spawnSystem.getHouses()) {
+      houseCounts.set(house.color, (houseCounts.get(house.color) ?? 0) + 1);
+    }
+    const businessCounts = new Map<GameColor, number>();
+    for (const business of this.spawnSystem.getBusinesses()) {
+      businessCounts.set(business.color, (businessCounts.get(business.color) ?? 0) + 1);
+    }
+    const colorDemands = this.demandSystem.getColorDemands();
+    const demandStats: DemandStat[] = this.spawnSystem.getUnlockedColors().map(color => {
+      const houses = houseCounts.get(color) ?? 0;
+      return {
         color,
         demand: colorDemands.get(color) ?? 0,
-        supplyPerMin: this.spawnSystem.getHouses().filter(h => h.color === color).length * this.cfg.HOUSE_SUPPLY_PER_MINUTE,
+        supplyPerMin: houses * this.cfg.HOUSE_SUPPLY_PER_MINUTE,
         demandPerMin: this.demandSystem.getColorPinOutputRate(color),
-        houses: this.spawnSystem.getHouses().filter(h => h.color === color).length,
-        businesses: this.spawnSystem.getBusinesses().filter(b => b.color === color).length,
-      }));
-    }
+        houses,
+        businesses: businessCounts.get(color) ?? 0,
+      };
+    });
     // Only fire stateCallback when values actually change to avoid per-frame React re-renders
     const score = this.carSystem.getScore();
     const gameWeek = this.getGameWeek();
@@ -756,8 +772,7 @@ export class Game {
       this.inventory.highways !== this.prevCallbackHighways ||
       this.inventory.gasStations !== this.prevCallbackGasStations ||
       gameWeek !== this.prevCallbackWeek ||
-      this.weekChoicePending !== this.prevCallbackWeekChoice ||
-      demandStats !== null
+      this.weekChoicePending !== this.prevCallbackWeekChoice
     )) {
       this.prevCallbackState = this.state;
       this.prevCallbackScore = score;

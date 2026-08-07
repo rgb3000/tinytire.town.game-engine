@@ -11,6 +11,7 @@ import { GasStationSystem } from '../systems/GasStationSystem';
 import { HighwaySystem } from '../systems/HighwaySystem';
 import { buildConfig, MOUNTAIN_MIN_HEIGHT, MOUNTAIN_MAX_HEIGHT, TILE_SIZE } from '../constants';
 import { InputHandler } from '../input/InputHandler';
+import { isTypingTarget } from '../input/keyboardTarget';
 import { RoadDrawer } from '../input/RoadDrawer';
 import { HighwayDrawer } from '../input/HighwayDrawer';
 import { serializeMapConfig } from '../maps/serializeMap';
@@ -196,6 +197,8 @@ export class MapDesigner {
 
     // Keyboard
     this.keydownHandler = (e: KeyboardEvent) => {
+      // See Game's handler: window-level shortcuts must not eat a host's typing.
+      if (isTypingTarget(e.target)) return;
       if (e.key === '+' || e.key === '=') this.renderer.zoomByKey(1);
       if (e.key === '-') this.renderer.zoomByKey(-1);
       if (e.key === 'r' || e.key === 'R') this.setTool(DesignerTool.Road);
@@ -226,6 +229,7 @@ export class MapDesigner {
     window.addEventListener('keydown', this.keydownHandler);
 
     this.keyupHandler = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
       if (e.key === ' ') {
         this.spaceDown = false;
         this.isPanning = false;
