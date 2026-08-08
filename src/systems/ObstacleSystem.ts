@@ -319,6 +319,9 @@ export class ObstacleSystem {
    */
   private openness(gx: number, gy: number): number {
     const fromEdge = Math.min(gx, gy, this.grid.cols - 1 - gx, this.grid.rows - 1 - gy);
+    // The `+ 1` keeps the old hard limit exactly: growth used to be clamped at
+    // `nx >= margin`, so a cell `margin` from the edge is the last legal one and the floor
+    // has to fall on `margin - 1`. Without it the mask eats a row the margin allowed.
     const edge = ramp(fromEdge - this.cfg.OBSTACLE_EDGE_MARGIN + 1, MASK_RAMP);
 
     const cx = this.grid.cols / 2;

@@ -117,6 +117,12 @@ export interface GameConstants {
   HIGHWAY_UNLOCK_WEEK: number;
 
   // Obstacles
+  //
+  // `_COUNT` is how many landforms are generated. The `_MIN_SIZE`/`_MAX_SIZE` pair is a
+  // target *area* in cells, not an exact cell count: the landform is grown to that area's
+  // radius and noise then decides how many cells it actually takes. Very small targets are
+  // rounded up to a radius that still reads as a landform, and the lake pair is exceeded
+  // outright for a lake that `LAKE_ISLAND_CHANCE` has picked to carry an island.
   MOUNTAIN_CLUSTER_COUNT: number;
   MOUNTAIN_CLUSTER_MIN_SIZE: number;
   MOUNTAIN_CLUSTER_MAX_SIZE: number;

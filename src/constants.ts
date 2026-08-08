@@ -106,7 +106,12 @@ export const LAKE_CLUSTER_MAX_SIZE = 12;
 export const OBSTACLE_EDGE_MARGIN = 3;
 export const OBSTACLE_CENTER_EXCLUSION = 8;
 
-/** Probability that a generated lake large enough to hold one is given an island. */
+/**
+ * Probability that a generated lake is given an island.
+ *
+ * Rolled before the lake is grown, not after: a lake that wins the roll is then grown to a
+ * size that can hold an island, exceeding `LAKE_CLUSTER_MAX_SIZE` if that is smaller.
+ */
 export const LAKE_ISLAND_CHANCE = 0.45;
 
 /** Spatial frequency of the noise that perturbs landform boundaries. Lower is smoother. */

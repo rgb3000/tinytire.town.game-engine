@@ -279,7 +279,12 @@ describe('ObstacleSystem generation', () => {
 
   it('stays compact across many seeds', () => {
     // One seed can get lucky. Measured against the random walk this replaces, the same
-    // sweep gives a mean of 0.34 and not one run under 0.2 — this is the bar it fails.
+    // sweep gives a mean of 0.33 and not one run under 0.2 — this is the bar it fails.
+    //
+    // Headroom is thinner than the mean suggests: over 500 seeds this implementation
+    // averages 0.006 but peaks at 0.190, just under the bar. The 25 seeds pinned here are
+    // safe, so a failure means a retune has eaten what little slack there is — check the
+    // radius floor and the noise fade-in before touching the threshold.
     const ratios: number[] = [];
     for (let seed = 1; seed <= 25; seed++) {
       const { system } = generate({ MOUNTAIN_CLUSTER_COUNT: 4, LAKE_CLUSTER_COUNT: 0 }, seed);
