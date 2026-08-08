@@ -1,6 +1,7 @@
 import type { Grid } from '../core/Grid';
 import type { GridPos } from '../types';
 import { CellType } from '../types';
+import { directionFromDelta } from '../utils/direction';
 import { PriorityQueue } from '../utils/PriorityQueue';
 import { octileDist } from '../utils/math';
 import { GRID_COLS, GRID_ROWS } from '../constants';
@@ -24,6 +25,23 @@ export function isRoadPassable(grid: Grid, gx: number, gy: number): boolean {
   if (!cell) return false;
   const t = cell.type;
   return t === CellType.Empty || t === CellType.Road || t === CellType.Connector;
+}
+
+/** Whether a diagonal road segment from (gx,gy) by (dx,dy) may pass the
+ *  shared corner. Terrain (mountain/lake) on either flanking cell blocks it,
+ *  as does an existing diagonal connection between the two flanks, which the
+ *  new segment would cross mid-corner. Buildings do NOT block: a road may
+ *  squeeze between two diagonally adjacent houses. Shared by the A*
+ *  pathfinder and drag drawing so both draw the same diagonals. */
+export function isDiagonalCutAllowed(grid: Grid, gx: number, gy: number, dx: number, dy: number): boolean {
+  const a = grid.getCell(gx + dx, gy);
+  const b = grid.getCell(gx, gy + dy);
+  if (!a || !b) return false;
+  if (a.type === CellType.Mountain || a.type === CellType.Lake) return false;
+  if (b.type === CellType.Mountain || b.type === CellType.Lake) return false;
+  // Connections are mutual; check both flanks anyway
+  return (a.roadConnections & directionFromDelta(-dx, dy)) === 0
+    && (b.roadConnections & directionFromDelta(dx, -dy)) === 0;
 }
 
 interface Node {
@@ -85,15 +103,7 @@ export function findRoadPlacementPath(grid: Grid, start: GridPos, end: GridPos):
       if (!isEndpoint && !isRoadPassable(grid, nx, ny)) continue;
 
       // Diagonal corner-cutting prevention
-      if (!n.cardinal) {
-        const adj1Passable = isRoadPassable(grid, current.gx + n.dx, current.gy) ||
-          (current.gy * cols + current.gx + n.dx) === startIdx ||
-          (current.gy * cols + current.gx + n.dx) === endIdx;
-        const adj2Passable = isRoadPassable(grid, current.gx, current.gy + n.dy) ||
-          ((current.gy + n.dy) * cols + current.gx) === startIdx ||
-          ((current.gy + n.dy) * cols + current.gx) === endIdx;
-        if (!adj1Passable || !adj2Passable) continue;
-      }
+      if (!n.cardinal && !isDiagonalCutAllowed(grid, current.gx, current.gy, n.dx, n.dy)) continue;
 
       const ng = cg + n.cost;
       if (ng < gCost[ni]) {

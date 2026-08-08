@@ -187,6 +187,42 @@ describe('RoadDrawer drag placement', () => {
     expect(f.getStock()).toBe(16);
   });
 
+  it('squeezes a diagonal between two diagonally adjacent houses', () => {
+    // Screenshot regression: a road stub ends at (1,1); houses sit at (2,1)
+    // and (1,2), each served by its own road; the player drags diagonally
+    // from the stub to the road at (2,2). Houses block their own cells but
+    // must not block the diagonal passing between them.
+    const f = makeFixture({ stock: 10 });
+    f.grid.setCell(2, 1, { type: CellType.House, entityId: 'h1' });
+    f.grid.setCell(1, 2, { type: CellType.House, entityId: 'h2' });
+    f.roadSystem.placeRoad(1, 1);
+    f.roadSystem.placeRoad(2, 2);
+
+    f.press(1, 1);
+    f.dragTo(2, 2);
+    f.release();
+
+    expect(connectionsAt(f.grid, 1, 1) & Direction.DownRight).toBe(Direction.DownRight);
+    expect(connectionsAt(f.grid, 2, 2) & Direction.UpLeft).toBe(Direction.UpLeft);
+  });
+
+  it('refuses a diagonal that would cross an existing diagonal road', () => {
+    const f = makeFixture({ stock: 10 });
+    f.roadSystem.placeRoad(2, 1);
+    f.roadSystem.placeRoad(1, 2);
+    f.roadSystem.connectRoads(2, 1, 1, 2);
+
+    f.press(1, 1);
+    f.dragTo(2, 2);
+    f.release();
+
+    // No X-crossing: the drag staircases through one of the existing roads
+    expect(connectionsAt(f.grid, 1, 1) & Direction.DownRight).toBe(0);
+    expect(connectionsAt(f.grid, 2, 2) & Direction.UpLeft).toBe(0);
+    expect(cellTypeAt(f.grid, 1, 1)).toBe(CellType.Road);
+    expect(cellTypeAt(f.grid, 2, 2)).toBe(CellType.Road);
+  });
+
   it('redirects a connected house to a new neighbor when dragged from it', () => {
     const f = makeFixture({ stock: 10 });
     f.grid.setCell(2, 2, { type: CellType.House, entityId: 'h1' });

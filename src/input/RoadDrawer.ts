@@ -6,7 +6,7 @@ import type { GridPos } from '../types';
 import { CellType, Tool } from '../types';
 import { GRID_COLS, GRID_ROWS, TILE_SIZE } from '../constants';
 import { connectionCount, forEachDirection, directionFromDelta, opposite } from '../utils/direction';
-import { findRoadPlacementPath, isRoadPassable } from '../pathfinding/RoadPlacementPathfinder';
+import { findRoadPlacementPath, isRoadPassable, isDiagonalCutAllowed } from '../pathfinding/RoadPlacementPathfinder';
 import { DragTracer } from './dragTrace';
 
 export interface InventorySlot {
@@ -279,22 +279,21 @@ export class RoadDrawer {
       let from = this.prevPlacedPos;
       const dx = from ? step.gx - from.gx : 0;
       const dy = from ? step.gy - from.gy : 0;
-      if (from && dx !== 0 && dy !== 0 && Math.abs(dx) === 1 && Math.abs(dy) === 1) {
-        // Diagonal step: don't cut a blocked corner (same rule as the A* pathfinder).
+      if (from && dx !== 0 && dy !== 0 && Math.abs(dx) === 1 && Math.abs(dy) === 1
+        && !isDiagonalCutAllowed(this.grid, from.gx, from.gy, dx, dy)) {
+        // Refused diagonal (terrain corner, or it would cross an existing
+        // diagonal road) — same rule as the A* pathfinder.
         const sideXOpen = isRoadPassable(this.grid, from.gx + dx, from.gy);
-        const sideYOpen = isRoadPassable(this.grid, from.gx, from.gy + dy);
-        if (!sideXOpen || !sideYOpen) {
-          const mid = sideXOpen ? { gx: from.gx + dx, gy: from.gy }
-            : sideYOpen ? { gx: from.gx, gy: from.gy + dy } : null;
-          if (mid && this.tryPlace(mid.gx, mid.gy) !== 'blocked') {
-            // Staircase through the open side, then treat the step as cardinal
-            this.connectAndRescue(from.gx, from.gy, mid.gx, mid.gy);
-            this.prevPlacedPos = mid;
-            this.lastBuiltPos = { ...mid };
-            from = mid;
-          } else {
-            from = null; // no legal way in: place the step cell unconnected
-          }
+        const mid = sideXOpen ? { gx: from.gx + dx, gy: from.gy }
+          : isRoadPassable(this.grid, from.gx, from.gy + dy) ? { gx: from.gx, gy: from.gy + dy } : null;
+        if (mid && this.tryPlace(mid.gx, mid.gy) !== 'blocked') {
+          // Staircase through an open side, then treat the step as cardinal
+          this.connectAndRescue(from.gx, from.gy, mid.gx, mid.gy);
+          this.prevPlacedPos = mid;
+          this.lastBuiltPos = { ...mid };
+          from = mid;
+        } else {
+          from = null; // no legal way in: place the step cell unconnected
         }
       }
 
