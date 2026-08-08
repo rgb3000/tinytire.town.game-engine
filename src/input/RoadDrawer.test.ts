@@ -159,6 +159,31 @@ describe('RoadDrawer drag placement', () => {
     }
   });
 
+  it('pauses while panning and resumes without bridging the gap', () => {
+    const f = makeFixture({ stock: 20 });
+    f.press(1, 1);
+    f.dragTo(2, 1);
+    f.input.panningActive = true;
+    f.dragTo(10, 8);
+    f.drawer.update();
+    f.input.panningActive = false;
+    f.drawer.update();
+    f.dragTo(12, 8);
+    f.release();
+
+    expect(cellTypeAt(f.grid, 1, 1)).toBe(CellType.Road);
+    expect(cellTypeAt(f.grid, 2, 1)).toBe(CellType.Road);
+    // Nothing placed along the pan-induced jump
+    expect(cellTypeAt(f.grid, 5, 4)).toBe(CellType.Empty);
+    expect(cellTypeAt(f.grid, 10, 8)).toBe(CellType.Empty);
+    // The resumed stretch exists but is not connected to the pre-pan one
+    expect(cellTypeAt(f.grid, 11, 8)).toBe(CellType.Road);
+    expect(cellTypeAt(f.grid, 12, 8)).toBe(CellType.Road);
+    expect(connectionsAt(f.grid, 2, 1)).toBe(Direction.Left);
+    expect(connectionsAt(f.grid, 11, 8)).toBe(Direction.Right);
+    expect(f.getStock()).toBe(16);
+  });
+
   it('redirects a connected house to a new neighbor when dragged from it', () => {
     const f = makeFixture({ stock: 10 });
     f.grid.setCell(2, 2, { type: CellType.House, entityId: 'h1' });

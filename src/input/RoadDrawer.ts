@@ -42,6 +42,7 @@ export class RoadDrawer {
   private prevCanvasY: number | null = null;
   private redirectSource: GridPos | null = null;
   private pendingDragStart: GridPos | null = null;
+  private panInterrupted = false;
 
   onRoadPlace: (() => void) | null = null;
   onRoadDelete: (() => void) | null = null;
@@ -168,11 +169,18 @@ export class RoadDrawer {
             this.lastBuiltPos = { ...gridPos };
           }
         }
+      } else if (this.input.panningActive) {
+        // Camera pan with the button still held: hold the drag. The cursor's
+        // world position jumps arbitrarily during a pan, so no cells are
+        // processed and the segment origin re-anchors when the pan ends.
+        this.panInterrupted = true;
       } else {
         // Dragging — walk exactly the cells the cursor path crossed
         const { canvasX, canvasY } = this.input.state;
-        if (this.prevCanvasX == null || this.prevCanvasY == null) {
-          // No segment origin (e.g. the press happened under another tool): anchor only
+        if (this.panInterrupted || this.prevCanvasX == null || this.prevCanvasY == null) {
+          // Re-anchor after a pan (or a press under another tool): no road
+          // bridges the jump, drawing resumes from the current cursor
+          this.panInterrupted = false;
           this.prevCanvasX = canvasX;
           this.prevCanvasY = canvasY;
         } else {
@@ -224,6 +232,7 @@ export class RoadDrawer {
       this.prevCanvasY = null;
       this.redirectSource = null;
       this.pendingDragStart = null;
+      this.panInterrupted = false;
     }
 
     this.wasLeftDown = leftDown;
