@@ -106,6 +106,12 @@ export const LAKE_CLUSTER_MAX_SIZE = 12;
 export const OBSTACLE_EDGE_MARGIN = 3;
 export const OBSTACLE_CENTER_EXCLUSION = 8;
 
+/** Probability that a generated lake large enough to hold one is given an island. */
+export const LAKE_ISLAND_CHANCE = 0.45;
+
+/** Spatial frequency of the noise that perturbs landform boundaries. Lower is smoother. */
+export const TERRAIN_NOISE_SCALE = 0.35;
+
 export const MOUNTAIN_COLOR = '#A0947C';
 export const LAKE_COLOR = '#7ABFCF';
 export const LAKE_SHORE_COLOR = '#C4B896';
@@ -195,6 +201,8 @@ export const DEFAULT_GAME_CONSTANTS: GameConstants = {
   LAKE_CLUSTER_MAX_SIZE,
   OBSTACLE_EDGE_MARGIN,
   OBSTACLE_CENTER_EXCLUSION,
+  LAKE_ISLAND_CHANCE,
+  TERRAIN_NOISE_SCALE,
   HOUSE_RANDOM_PLACEMENT_CHANCE,
   HOUSE_SUPPLY_PER_MINUTE,
   HOUSE_SUPPLY_PER_MINUTE_MIN,

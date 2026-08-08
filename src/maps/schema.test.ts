@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 
 import { validateMapConfig } from './loadMap';
 import { toMapFile, serializeMapConfig } from './serializeMap';
-import { DEFAULT_GAME_CONSTANTS } from '../constants';
+import { DEFAULT_GAME_CONSTANTS, buildConfig } from '../constants';
 import { DEFAULT_COLOR_THEME, THEME_COLOR_KEYS, diffColorTheme, buildColorTheme } from '../designer/colorTheme';
 import { GameColor, Direction } from '../types';
 import type { MapConfig } from './types';
@@ -335,5 +335,13 @@ describe('validation errors', () => {
   it('rejects a non-object', () => {
     expect(() => validateMapConfig(null)).toThrow();
     expect(() => validateMapConfig('a map')).toThrow();
+  });
+});
+
+describe('terrain generation constants', () => {
+  it('accepts the new obstacle keys from a map', () => {
+    const cfg = buildConfig({ LAKE_ISLAND_CHANCE: 1, TERRAIN_NOISE_SCALE: 0.9 });
+    expect(cfg.LAKE_ISLAND_CHANCE).toBe(1);
+    expect(cfg.TERRAIN_NOISE_SCALE).toBe(0.9);
   });
 });

@@ -125,6 +125,8 @@ export interface GameConstants {
   LAKE_CLUSTER_MAX_SIZE: number;
   OBSTACLE_EDGE_MARGIN: number;
   OBSTACLE_CENTER_EXCLUSION: number;
+  LAKE_ISLAND_CHANCE: number;
+  TERRAIN_NOISE_SCALE: number;
 
   // Demand-aware spawning
   HOUSE_SUPPLY_PER_MINUTE: number;
