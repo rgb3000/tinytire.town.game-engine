@@ -120,8 +120,6 @@ export const TERRAIN_NOISE_SCALE = 0.35;
 export const MOUNTAIN_COLOR = '#A0947C';
 export const LAKE_COLOR = '#7ABFCF';
 export const LAKE_SHORE_COLOR = '#C4B896';
-export const MOUNTAIN_MIN_HEIGHT = 6;
-export const MOUNTAIN_MAX_HEIGHT = 14;
 
 // Demand-aware spawning
 //

@@ -9,7 +9,7 @@ import { SpawnSystem, type SpawnDemandSource } from '../systems/SpawnSystem';
 import { ObstacleSystem } from '../systems/ObstacleSystem';
 import { GasStationSystem } from '../systems/GasStationSystem';
 import { HighwaySystem } from '../systems/HighwaySystem';
-import { buildConfig, MOUNTAIN_MIN_HEIGHT, MOUNTAIN_MAX_HEIGHT, TILE_SIZE } from '../constants';
+import { buildConfig, TILE_SIZE } from '../constants';
 import { InputHandler } from '../input/InputHandler';
 import { CameraController } from '../input/CameraController';
 import { KeyBindings } from '../input/KeyBindings';
@@ -414,8 +414,6 @@ export class MapDesigner {
     // If cell was empty, initialize it as mountain
     if (cell.type === CellType.Empty) {
       this.grid.setCell(gx, gy, { type: CellType.Mountain });
-      const height = MOUNTAIN_MIN_HEIGHT + Math.random() * (MOUNTAIN_MAX_HEIGHT - MOUNTAIN_MIN_HEIGHT);
-      this.obstacleSystem.getMountainHeightMap().set(key, height);
       this.obstacleSystem.getMountainCells().push({ gx, gy });
     }
 
@@ -553,7 +551,6 @@ export class MapDesigner {
       const cells = this.obstacleSystem.getMountainCells();
       const idx = cells.findIndex(c => c.gx === gx && c.gy === gy);
       if (idx !== -1) cells.splice(idx, 1);
-      this.obstacleSystem.getMountainHeightMap().delete(`${gx},${gy}`);
       this.mountainTriangles.delete(`${gx},${gy}`);
       this.rebuildObstacles();
       return;
@@ -730,8 +727,6 @@ export class MapDesigner {
           gy: c.gy,
           type: 'mountain' as const,
         };
-        const height = this.obstacleSystem.getMountainHeightMap().get(`${c.gx},${c.gy}`);
-        if (height !== undefined) def.height = height;
         if (tri && !(tri.top && tri.right && tri.bottom && tri.left)) {
           if (tri.top) def.top = true;
           if (tri.right) def.right = true;

@@ -1,9 +1,6 @@
 import type { Grid } from '../core/Grid';
 import type { GridPos } from '../types';
 import { CellType } from '../types';
-// Mountain heights are not `GameConstants` keys, so they are not map-overridable and stay
-// module-level. Everything a map *can* override arrives through the constructor's `cfg`.
-import { MOUNTAIN_MIN_HEIGHT, MOUNTAIN_MAX_HEIGHT } from '../constants';
 import type { ObstacleDefinition, GameConstants, MountainTriangles, LakeTriangles } from '../maps/types';
 import { omitUndefined } from '../utils/omitUndefined';
 import { mulberry32 } from '../utils/rng';
@@ -58,7 +55,6 @@ export class ObstacleSystem {
   private grid: Grid;
   private mountainCells: GridPos[] = [];
   private lakeCells: GridPos[] = [];
-  private mountainHeightMap = new Map<string, number>();
   private mountainTriangles: MountainTriangles = new Map();
   private lakeTriangles: LakeTriangles = new Map();
   private predefinedObstacles: ObstacleDefinition[] | undefined;
@@ -87,7 +83,6 @@ export class ObstacleSystem {
   generate(): void {
     this.mountainCells = [];
     this.lakeCells = [];
-    this.mountainHeightMap.clear();
     this.mountainTriangles.clear();
     this.lakeTriangles.clear();
 
@@ -194,8 +189,6 @@ export class ObstacleSystem {
       if (wantsIsland && claimed.length >= MIN_ISLAND_HOST_SIZE) {
         this.carveIsland(rng, claimed, seedPos, radius);
       }
-
-      if (cellType === CellType.Mountain) this.assignMountainHeights(claimed);
 
       out.push(...claimed);
     }
@@ -332,25 +325,6 @@ export class ObstacleSystem {
     return Math.min(edge, centre);
   }
 
-  /**
-   * Heights for one generated mountain landform, tallest at its centre.
-   *
-   * Nothing renders these any more — the rebuild draws mountains from their outline — but
-   * they stay populated until the height map is removed wholesale.
-   */
-  private assignMountainHeights(cells: GridPos[]): void {
-    if (cells.length === 0) return;
-    const cx = cells.reduce((s, p) => s + p.gx, 0) / cells.length;
-    const cy = cells.reduce((s, p) => s + p.gy, 0) / cells.length;
-    const maxDist = Math.max(...cells.map(p => Math.hypot(p.gx - cx, p.gy - cy)), 1);
-
-    for (const pos of cells) {
-      const t = 1 - Math.hypot(pos.gx - cx, pos.gy - cy) / maxDist;
-      const height = MOUNTAIN_MIN_HEIGHT + t * (MOUNTAIN_MAX_HEIGHT - MOUNTAIN_MIN_HEIGHT);
-      this.mountainHeightMap.set(`${pos.gx},${pos.gy}`, Math.max(MOUNTAIN_MIN_HEIGHT, height));
-    }
-  }
-
   private placePredefined(obstacles: ObstacleDefinition[]): void {
     for (const obs of obstacles) {
       if (!this.grid.inBounds(obs.gx, obs.gy)) continue;
@@ -359,8 +333,6 @@ export class ObstacleSystem {
 
       if (obs.type === 'mountain') {
         this.grid.setCell(obs.gx, obs.gy, { type: CellType.Mountain });
-        const height = obs.height ?? (MOUNTAIN_MIN_HEIGHT + Math.random() * (MOUNTAIN_MAX_HEIGHT - MOUNTAIN_MIN_HEIGHT));
-        this.mountainHeightMap.set(`${obs.gx},${obs.gy}`, height);
         this.mountainCells.push({ gx: obs.gx, gy: obs.gy });
         // Store triangle data if any triangle field is specified
         if (obs.top !== undefined || obs.right !== undefined || obs.bottom !== undefined || obs.left !== undefined) {
@@ -387,10 +359,6 @@ export class ObstacleSystem {
 
   getLakeCells(): GridPos[] {
     return this.lakeCells;
-  }
-
-  getMountainHeightMap(): Map<string, number> {
-    return this.mountainHeightMap;
   }
 
   getMountainTriangles(): MountainTriangles {

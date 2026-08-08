@@ -4,7 +4,12 @@ export interface ObstacleDefinition {
   gx: number;
   gy: number;
   type: 'mountain' | 'lake';
-  height?: number; // mountains only
+  /**
+   * @deprecated Ignored since the terrain rebuild — terrace count is derived from a
+   * landform's actual thickness, not from a per-cell height. Still accepted by the schema
+   * and passed through by `serializeMap` so existing maps keep round-tripping unchanged.
+   */
+  height?: number;
   top?: boolean; right?: boolean; bottom?: boolean; left?: boolean; // triangle subdivision (mountains & lakes)
 }
 
