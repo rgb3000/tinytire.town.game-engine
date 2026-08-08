@@ -11,7 +11,13 @@ import { LakeLayer, LAKE_CLIFF_NAME } from './LakeLayer';
 // `Scene` is a bare object graph, so a layer can be built and inspected headless.
 
 const LAYER_HEIGHT = 4;
-const MAX_DEPTH_DARKEN = 0.55;
+
+/**
+ * Duplicated rather than imported: `LakeLayer` keeps this private, and a test that read the
+ * implementation's own constant would pass for any value it was retuned to. Retuning the
+ * lakebed is meant to fail here and be confirmed here.
+ */
+const MAX_DEPTH_DARKEN = 0.85;
 
 // ---------------------------------------------------------------------------- fixtures
 
@@ -186,8 +192,15 @@ function createdSince(cursor: number): number {
   return materialIdCursor() - cursor - 1;
 }
 
-/** Every vertex of every water mesh, as world x/z with the red channel of its colour. */
-interface Shaded { x: number; z: number; brightness: number }
+/**
+ * Every vertex of every water mesh, as world x/z with the red channel of its colour.
+ *
+ * `terrace` identifies which step the vertex was drawn into. Depth alone no longer determines
+ * colour — the ramp is banded per terrace on purpose — so anything checking the ramp's shape
+ * has to be able to tell two meshes apart. World y is the terrace index scaled by the step
+ * height, and reading it off the mesh keeps the helper from having to be told the layout.
+ */
+interface Shaded { x: number; z: number; terrace: number; brightness: number }
 
 function shadedVertices(scene: THREE.Scene): Shaded[] {
   const out: Shaded[] = [];
@@ -196,11 +209,17 @@ function shadedVertices(scene: THREE.Scene): Shaded[] {
     const color = mesh.geometry.getAttribute('color');
     expect(color, 'every water mesh carries a colour attribute').toBeDefined();
     expect(color.count).toBe(position.count);
+    const terrace = Math.round((GROUND_Y_POSITION - worldY(mesh)) / LAYER_HEIGHT);
     for (let i = 0; i < position.count; i++) {
-      out.push({ x: position.getX(i), z: position.getZ(i), brightness: color.getX(i) });
+      out.push({ x: position.getX(i), z: position.getZ(i), terrace, brightness: color.getX(i) });
     }
   }
   return out;
+}
+
+/** How far below the base colour a brightness sits, as a fraction. */
+function darkening(brightness: number, base: THREE.Color): number {
+  return 1 - brightness / base.r;
 }
 
 /** Euclidean distance in tiles from `(x, z)` to the edge of an axis-aligned square. */
@@ -237,6 +256,12 @@ function brightnessByDepth(samples: { depth: number; brightness: number }[]): Ba
       spread: Math.max(...values) - Math.min(...values),
     }))
     .sort((a, b) => a.depth - b.depth);
+}
+
+/** The same bucketing, but keyed by terrace as well, so no bucket straddles a step edge. */
+function bandsPerTerrace(samples: { depth: number; terrace: number; brightness: number }[]): Band[] {
+  const terraces = new Set(samples.map(s => s.terrace));
+  return [...terraces].flatMap(t => brightnessByDepth(samples.filter(s => s.terrace === t)));
 }
 
 // ---------------------------------------------------------------------------- tests
@@ -428,6 +453,7 @@ describe('LakeLayer', () => {
       const width = size * TILE_SIZE;
       const samples = shadedVertices(scene).map(v => ({
         depth: Math.min(v.x, width - v.x, v.z, width - v.z) / TILE_SIZE,
+        terrace: v.terrace,
         brightness: v.brightness,
       }));
 
@@ -437,11 +463,14 @@ describe('LakeLayer', () => {
 
       for (let i = 1; i < bands.length; i++) {
         expect(bands[i].brightness).toBeLessThan(bands[i - 1].brightness);
-        // Depth is a property of position, not of which terrace a vertex was drawn into: two
-        // vertices the same distance from shore are the same colour even when they belong to
-        // different meshes, which is what stops the ramp from banding at the step edges.
-        expect(bands[i].spread).toBeLessThan(1e-6);
       }
+
+      // Within one terrace, depth is the only thing colouring a vertex — two vertices the
+      // same distance from shore *on the same step* are the same colour. Across terraces they
+      // are deliberately not: the ramp is banded, and the band edges are the depth cue. The
+      // buckets above already mix the two sides of every step, so spread has to be measured
+      // per terrace to say anything.
+      for (const band of bandsPerTerrace(samples)) expect(band.spread).toBeLessThan(1e-6);
 
       // And the ramp has to be worth looking at: the shore is the undarkened base colour and
       // the deepest contour is visibly below it.
@@ -450,20 +479,96 @@ describe('LakeLayer', () => {
       expect(bands[bands.length - 1].brightness).toBeLessThan(base.r * 0.9);
     });
 
-    it('darkens the deepest terrace to roughly half the surface brightness', () => {
-      // 4x4 is where the ramp bites hardest: `MAX_TERRACES` caps the contour stack at 1.5
-      // tiles, and a 4x4 lake's field bottoms out at 1.875, so the deepest contour is 80% of
-      // the way to `MAX_DEPTH_DARKEN`. Catches a ramp normalised by the wrong quantity —
-      // pixels rather than tiles would leave every vertex at the base colour.
-      layer.build(scene, block(4));
+    it('steps down a visible band at every terrace edge, and ramps within each', () => {
+      // Both halves of the split are load-bearing and each fails silently without the other.
+      // Terrace index alone gives flat plateaus; the per-vertex ramp alone gives one tone
+      // across everything past 1.5 tiles, where earcut stops producing vertices.
+      layer.build(scene, block(8));
 
       const base = new THREE.Color(LAKE_COLOR);
-      const brightness = shadedVertices(scene).map(v => v.brightness);
+      const ranges = new Map<number, { lo: number; hi: number }>();
+      for (const v of shadedVertices(scene)) {
+        const d = darkening(v.brightness, base);
+        const range = ranges.get(v.terrace);
+        if (range) { range.lo = Math.min(range.lo, d); range.hi = Math.max(range.hi, d); }
+        else ranges.set(v.terrace, { lo: d, hi: d });
+      }
+      const terraces = [...ranges.keys()].sort((a, b) => a - b);
+      expect(terraces).toEqual([0, 1, 2, 3, 4, 5]);
 
-      expect(Math.max(...brightness)).toBeCloseTo(base.r, 6);
-      expect(Math.min(...brightness)).toBeLessThan(base.r * 0.6);
-      // Never past the cap, however deep the lake gets.
-      expect(Math.min(...brightness)).toBeGreaterThan(base.r * (1 - MAX_DEPTH_DARKEN));
+      // The notch: a terrace's shallowest tone against the *deepest* tone of the terrace
+      // above. This is the gap the internal ramp is deliberately not allowed to close — let
+      // it spend a whole step and the banding disappears into a continuous ramp.
+      for (let i = 1; i < terraces.length; i++) {
+        const notch = ranges.get(terraces[i])!.lo - ranges.get(terraces[i - 1])!.hi;
+        expect(notch, `notch below terrace ${terraces[i]}`).toBeGreaterThan(0.02);
+      }
+
+      // The gradient: every terrace but the deepest varies across its own width. The deepest
+      // is saturated at the cap by construction and has nowhere left to go.
+      for (const t of terraces.slice(0, -1)) {
+        const { lo, hi } = ranges.get(t)!;
+        expect(hi - lo, `gradient across terrace ${t}`).toBeGreaterThan(0.02);
+      }
+      expect(ranges.get(5)!.hi - ranges.get(5)!.lo).toBe(0);
+    });
+
+    it('darkens the deepest terrace to the full cap at every lake size', () => {
+      // The defect this pins: darkening used to be normalised by the lake's own maximum depth
+      // while `MAX_TERRACES` pinned the deepest contour at 1.5 tiles, so bigger lakes came out
+      // *lighter* — 36% at 3x3 falling to 14% at 12x12. Driving the band from the terrace
+      // index instead makes the floor of the deepest terrace independent of size.
+      const base = new THREE.Color(LAKE_COLOR);
+      const cases: [string, GridPos[]][] = [
+        ['3x3', block(3)], ['4x4', block(4)], ['8x8', block(8)],
+        ['12x12', block(12)], ['20x20', block(20)],
+        // Island lakes as well: their deepest terrace is bounded by the island's isoline as
+        // well as the bank's, and bilinear sampling lands a few float-epsilons *past* that
+        // threshold. Unclamped, those vertices come out fractionally darker than the cap —
+        // which is what the `Math.min` in `applyDepthColors` is there for, and why the bound
+        // below is asserted exactly rather than approximately.
+        ['ring', ringCells()], ['nested', nestedCells()],
+      ];
+
+      for (const [name, cells] of cases) {
+        layer.build(scene, cells);
+        const brightness = shadedVertices(scene).map(v => v.brightness);
+
+        // The shore is still the untouched base colour at every size.
+        expect(darkening(Math.max(...brightness), base), `${name} shore`).toBeCloseTo(0, 6);
+        // And the bed reaches the cap — never short of it...
+        expect(darkening(Math.min(...brightness), base), `${name} bed`)
+          .toBeCloseTo(MAX_DEPTH_DARKEN, 6);
+        // ...and never past it, to the last bit.
+        expect(darkening(Math.min(...brightness), base), `${name} cap`)
+          .toBeLessThanOrEqual(MAX_DEPTH_DARKEN);
+      }
+    });
+
+    it('leaves a single-terrace lake finite and un-blackened', () => {
+      // A one-cell lake's field never reaches `STEP_TILES`, so it gets exactly one terrace and
+      // there are zero steps between shallowest and deepest. Dividing the band by that step
+      // count is `0 / 0`, and `NaN` in a colour buffer does not throw — it renders the water
+      // black or white with nothing in the logs to point at.
+      layer.build(scene, block(1));
+
+      const base = new THREE.Color(LAKE_COLOR);
+      const meshes = waterMeshes(scene);
+      expect(meshes).toHaveLength(1);
+
+      for (const mesh of meshes) {
+        const color = mesh.geometry.getAttribute('color');
+        expect(color.count).toBeGreaterThan(0);
+        for (let i = 0; i < color.count * 3; i++) {
+          const channel = (color.array as ArrayLike<number>)[i];
+          expect(Number.isFinite(channel), `channel ${i}`).toBe(true);
+        }
+      }
+
+      // A puddle has no depth to express, so it stays at the surface colour rather than
+      // being promoted to "deepest terrace" and painted at the full cap.
+      const brightness = shadedVertices(scene).map(v => v.brightness);
+      expect(darkening(Math.min(...brightness), base)).toBeCloseTo(0, 6);
     });
 
     it('shallows again as it approaches an island', () => {

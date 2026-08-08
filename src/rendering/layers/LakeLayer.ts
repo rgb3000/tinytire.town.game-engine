@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import type { GridPos } from '../../types';
 import type { LakeTriangles } from '../../maps/types';
 import { GROUND_Y_POSITION, LAKE_COLOR, LAKE_SHORE_COLOR } from '../../constants';
-import { lerp } from '../../utils/math';
+import { clamp, lerp } from '../../utils/math';
 import type { NestedPolygon, TerrainContours } from '../../terrain';
-import { buildTerrainContours, worldToSample, sampleFieldBilinear, signedArea } from '../../terrain';
+import { buildTerrainContours, worldToSample, sampleFieldBilinear, signedArea, STEP_TILES } from '../../terrain';
 import { buildTerraceMeshes, buildFlatRing } from './terrainMesh';
 
 const LAKE_LAYER_HEIGHT = 4;
@@ -16,8 +16,23 @@ const LAKE_LAYER_HEIGHT = 4;
  */
 const SHORELINE_TILES = 0.15;
 
-/** How far the deepest water is blended toward black. */
-const MAX_DEPTH_DARKEN = 0.55;
+/**
+ * How far the deepest terrace is blended toward black.
+ *
+ * The deepest terrace of *any* lake reaches exactly this — see `applyDepthColors` — so this
+ * is the one number to turn when the lakebed reads too dark or too washed out.
+ */
+const MAX_DEPTH_DARKEN = 0.85;
+
+/**
+ * How much of one terrace's darkening step the per-vertex ramp may spend inside that terrace.
+ *
+ * Strictly below 1, which is what leaves a visible tonal step at every terrace edge: the
+ * terraces are physical steps with a wall between them, and the banding is the cue that reads
+ * as depth under a top-down camera. At 0 the lakebed would be flat plateaus with no gradient;
+ * at 1 the ramp would close every step and the banding would vanish.
+ */
+const INTRA_TERRACE_SHARE = 0.6;
 
 /**
  * A loop this small bounds no visible wall, and extrudes into two coincident, back-to-back
@@ -66,7 +81,7 @@ export class LakeLayer {
       stepHeight: LAKE_LAYER_HEIGHT,
       baseOffset: 0,
       makeMaterial: () => makeWaterMaterial(),
-      decorate: (mesh) => applyDepthColors(mesh, contours, baseColor),
+      decorate: (mesh, levelIndex) => applyDepthColors(mesh, contours, baseColor, levelIndex),
     });
 
     // Materials come from the builder's own list, not from walking the meshes: one material
@@ -203,23 +218,50 @@ function addWall(out: number[], loop: number[][], depth: number): void {
 }
 
 /**
- * Write a shore-to-centre depth ramp into the mesh's vertex colours.
+ * Write a shore-to-bed depth ramp into the mesh's vertex colours.
  *
- * Terraced steps alone read as flat under the top-down camera, and a small lake only fits
- * one step at all — this is what makes depth legible at every lake size. Sampling the same
- * distance field the contours came from means the ramp also shallows correctly around an
- * island, since the island's edge is a zero point in that field.
+ * Two terms, and the split is the whole point of this function.
+ *
+ * The **terrace index** carries the bulk of it. It is uniform across a mesh, so it cannot be
+ * washed out by a shortage of vertices — and there is a shortage. `ExtrudeGeometry`
+ * triangulates a cap with earcut, which adds no interior points, so a large lake's deepest
+ * cap has vertices only around its rim and everything inside that rim interpolates from it.
+ * The purely per-vertex ramp this replaces was normalised by `maxDistanceTiles` while
+ * `MAX_TERRACES` pinned the deepest contour at 1.5 tiles, so its darkening *fell* as lakes
+ * grew — measured at 36% on a 3x3 and 14% on a 12x12. Indexing by terrace instead makes the
+ * deepest terrace land on the cap exactly, at every size.
+ *
+ * The **distance field** then supplies a finer gradient within each terrace, worth at most
+ * `INTRA_TERRACE_SHARE` of one step so the step itself survives. Sampling the same field the
+ * contours were traced from is what makes the ramp shallow again around an island, whose edge
+ * is a zero of that field.
+ *
+ * `levels.length - 1` is the number of steps between the shallowest terrace and the deepest.
+ * A one-terrace lake — a single cell, whose field never reaches `STEP_TILES` — has none, and
+ * `Math.max(1, …)` is what keeps that `0 / 0` out of the colour buffer: `NaN` there does not
+ * throw, it just renders the water black or white with nothing to point at.
  */
-function applyDepthColors(mesh: THREE.Mesh, contours: TerrainContours, baseColor: THREE.Color): void {
+function applyDepthColors(
+  mesh: THREE.Mesh,
+  contours: TerrainContours,
+  baseColor: THREE.Color,
+  levelIndex: number,
+): void {
+  const steps = Math.max(1, contours.levels.length - 1);
+  const terraceFloor = levelIndex / steps;
+  const rampSpan = INTRA_TERRACE_SHARE / steps;
+  // The contour this terrace was traced at, and so the depth its own gradient starts from.
+  const terraceDepth = levelIndex * STEP_TILES;
+
   const position = mesh.geometry.getAttribute('position');
   const colors = new Float32Array(position.count * 3);
-  const maxDepth = Math.max(contours.maxDistanceTiles, 1e-6);
 
   for (let i = 0; i < position.count; i++) {
     // Contours are built in world XY; rotateX(PI/2) maps that onto world XZ.
     const { sx, sy } = worldToSample(contours.field, position.getX(i), position.getZ(i));
-    const depth = Math.max(0, sampleFieldBilinear(contours.field, sx, sy)) / maxDepth;
-    const darken = Math.min(1, depth) * MAX_DEPTH_DARKEN;
+    const depth = sampleFieldBilinear(contours.field, sx, sy);
+    const within = clamp((depth - terraceDepth) / STEP_TILES, 0, 1);
+    const darken = Math.min(1, terraceFloor + within * rampSpan) * MAX_DEPTH_DARKEN;
     colors[i * 3 + 0] = lerp(baseColor.r, 0, darken);
     colors[i * 3 + 1] = lerp(baseColor.g, 0, darken);
     colors[i * 3 + 2] = lerp(baseColor.b, 0, darken);
