@@ -1,8 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { traceDragCells, DRAG_CORNER_TOLERANCE_RATIO } from './dragTrace';
+import { DragTracer, DRAG_DIAGONAL_HOLD_RATIO } from './dragTrace';
 import type { GridPos } from '../types';
 
 const TILE = 40;
+
+/** Run a full drag through a tracer: advance through all points, flush on the last. */
+function trace(points: Array<[number, number]>): GridPos[] {
+  const [first, ...rest] = points;
+  const tracer = new DragTracer(first[0], first[1], TILE);
+  const out: GridPos[] = [];
+  for (let i = 0; i < rest.length - 1; i++) {
+    out.push(...tracer.advance(rest[i][0], rest[i][1]));
+  }
+  const last = rest.length > 0 ? rest[rest.length - 1] : first;
+  out.push(...tracer.flush(last[0], last[1]));
+  return out;
+}
 
 function isKingPath(cells: GridPos[], start: GridPos): boolean {
   let prev = start;
@@ -15,65 +28,78 @@ function isKingPath(cells: GridPos[], start: GridPos): boolean {
   return true;
 }
 
-describe('traceDragCells', () => {
-  it('returns empty for a zero-length segment', () => {
-    expect(traceDragCells(60, 60, 60, 60, TILE)).toEqual([]);
+describe('DragTracer', () => {
+  it('emits nothing for a zero-length drag', () => {
+    expect(trace([[60, 60], [60, 60]])).toEqual([]);
   });
 
-  it('returns empty while the cursor stays inside the start cell', () => {
-    // Jitter near the cell corner — the original bug's trigger geometry
-    expect(traceDragCells(35, 35, 38, 33, TILE)).toEqual([]);
+  it('emits nothing while the cursor jitters inside the start cell', () => {
+    // Wiggling near the cell corner — the original bug's trigger geometry
+    expect(trace([[35, 35], [38, 33], [35, 36], [37, 34]])).toEqual([]);
   });
 
   it('traces cardinal steps for a horizontal drag across three cells', () => {
-    expect(traceDragCells(20, 20, 140, 20, TILE)).toEqual([
+    expect(trace([[20, 20], [140, 20]])).toEqual([
       { gx: 1, gy: 0 }, { gx: 2, gy: 0 }, { gx: 3, gy: 0 },
     ]);
   });
 
   it('traces cardinal steps for a vertical drag across three cells', () => {
-    expect(traceDragCells(20, 20, 20, 140, TILE)).toEqual([
+    expect(trace([[20, 20], [20, 140]])).toEqual([
       { gx: 0, gy: 1 }, { gx: 0, gy: 2 }, { gx: 0, gy: 3 },
     ]);
   });
 
   it('emits diagonals for a 45-degree drag through cell centers', () => {
-    expect(traceDragCells(20, 20, 140, 140, TILE)).toEqual([
+    expect(trace([[20, 20], [140, 140]])).toEqual([
       { gx: 1, gy: 1 }, { gx: 2, gy: 2 }, { gx: 3, gy: 3 },
     ]);
   });
 
-  it('staircases a 45-degree drag through edge midpoints', () => {
-    // Line y = x + 20 stays 20/sqrt(2) ≈ 14.1 px from every corner (tolerance is 10)
-    const cells = traceDragCells(10, 30, 90, 110, TILE);
-    expect(cells).toEqual([
-      { gx: 0, gy: 1 }, { gx: 1, gy: 1 }, { gx: 1, gy: 2 }, { gx: 2, gy: 2 },
-    ]);
-    expect(isKingPath(cells, { gx: 0, gy: 0 })).toBe(true);
-  });
-
-  it('steps diagonally iff the segment passes within tolerance of the corner', () => {
-    // 45° lines offset so their perpendicular distance to corner (40,40) is 9 / 11 px
-    const near = 9 * Math.SQRT2;
-    const far = 11 * Math.SQRT2;
-    expect(traceDragCells(20, 20 + near, 60, 60 + near, TILE)).toEqual([
-      { gx: 1, gy: 1 },
-    ]);
-    expect(traceDragCells(20, 20 + far, 60, 60 + far, TILE)).toEqual([
-      { gx: 0, gy: 1 }, { gx: 1, gy: 1 },
+  it('emits diagonals for a 45-degree drag offset from the corners', () => {
+    // Through edge midpoints — maximum distance from every lattice corner
+    expect(trace([[10, 30], [90, 110]])).toEqual([
+      { gx: 1, gy: 1 }, { gx: 2, gy: 2 },
     ]);
   });
 
-  it('turns a shallow drag into cardinal runs with a diagonal transition', () => {
-    // Slope 1/4 from cell center (0,0) to cell center (4,1): the row change
-    // passes within tolerance of corner (80,40) → single diagonal step there.
-    expect(traceDragCells(20, 20, 180, 60, TILE)).toEqual([
-      { gx: 1, gy: 0 }, { gx: 2, gy: 1 }, { gx: 3, gy: 1 }, { gx: 4, gy: 1 },
+  it('emits diagonals for a slow 45-degree drag fed in tiny increments', () => {
+    // Regression: small per-frame segments split the two crossings of a
+    // diagonal across separate advance() calls; pairing must span them.
+    const points: Array<[number, number]> = [];
+    for (let i = 0; i <= 20; i++) points.push([10 + i * 4, 30 + i * 4]);
+    expect(trace(points)).toEqual([
+      { gx: 1, gy: 1 }, { gx: 2, gy: 2 },
     ]);
+  });
+
+  it('keeps a deliberate L-turn as two cardinal runs', () => {
+    expect(trace([[20, 20], [100, 20], [100, 100]])).toEqual([
+      { gx: 1, gy: 0 }, { gx: 2, gy: 0 }, { gx: 2, gy: 1 }, { gx: 2, gy: 2 },
+    ]);
+  });
+
+  it('commits a cardinal crossing in the same advance that produced it', () => {
+    // Straight drags must not lag behind the cursor: barely 5px into the
+    // next cell, the step is already out.
+    const tracer = new DragTracer(20, 20, TILE);
+    expect(tracer.advance(20, 45)).toEqual([{ gx: 0, gy: 1 }]);
+  });
+
+  it('swallows jitter across a cell boundary while heading diagonally', () => {
+    // A diagonal drag wobbling briefly across a line it already crossed
+    // cancels the crossing instead of emitting a step pair
+    const tracer = new DragTracer(30, 10, TILE);
+    const out = [
+      ...tracer.advance(44, 24),  // crosses x=40 heading diagonally — held
+      ...tracer.advance(38, 30),  // wobbles back across x=40 — cancelled
+      ...tracer.flush(38, 30),
+    ];
+    expect(out).toEqual([]);
   });
 
   it('covers a long fast drag with a connected king path ending at the end cell', () => {
-    const cells = traceDragCells(20, 20, 20 + 15 * TILE, 20 + 7 * TILE, TILE);
+    const cells = trace([[20, 20], [20 + 15 * TILE, 20 + 7 * TILE]]);
     expect(isKingPath(cells, { gx: 0, gy: 0 })).toBe(true);
     expect(cells[cells.length - 1]).toEqual({ gx: 15, gy: 7 });
     expect(cells.length).toBeGreaterThanOrEqual(15);
@@ -82,27 +108,13 @@ describe('traceDragCells', () => {
 
   it('keeps floor semantics for endpoints exactly on grid lines', () => {
     // Rightward: start on the line belongs to cell 1, end on the line to cell 2
-    expect(traceDragCells(40, 20, 80, 20, TILE)).toEqual([{ gx: 2, gy: 0 }]);
+    expect(trace([[40, 20], [80, 20]])).toEqual([{ gx: 2, gy: 0 }]);
     // Leftward: start on the line belongs to cell 2, end on the line to cell 1
-    expect(traceDragCells(80, 20, 40, 20, TILE)).toEqual([{ gx: 1, gy: 0 }]);
+    expect(trace([[80, 20], [40, 20]])).toEqual([{ gx: 1, gy: 0 }]);
   });
 
-  it('visits the same cells when the drag is reversed', () => {
-    const fwd = traceDragCells(25, 35, 230, 150, TILE);
-    const back = traceDragCells(230, 150, 25, 35, TILE);
-    const key = (c: GridPos) => `${c.gx},${c.gy}`;
-    const fwdSet = new Set([...fwd.map(key), '0,0']);
-    const backSet = new Set([...back.map(key), '5,3']);
-    expect(backSet).toEqual(fwdSet);
-  });
-
-  it('traces through negative world coordinates without clamping', () => {
-    expect(traceDragCells(-30, 20, 90, 20, TILE)).toEqual([
-      { gx: 0, gy: 0 }, { gx: 1, gy: 0 }, { gx: 2, gy: 0 },
-    ]);
-  });
-
-  it('exports the corner tolerance ratio used by default', () => {
-    expect(DRAG_CORNER_TOLERANCE_RATIO).toBeCloseTo(0.25);
+  it('holds crossings long enough to pair any 45-degree lattice offset', () => {
+    // Crossing pairs on a 45° line sit up to tile/√2 apart in arc length
+    expect(DRAG_DIAGONAL_HOLD_RATIO).toBeGreaterThan(Math.SQRT1_2);
   });
 });

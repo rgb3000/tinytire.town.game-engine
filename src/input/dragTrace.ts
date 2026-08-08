@@ -1,94 +1,206 @@
 import type { GridPos } from '../types';
 
-/** Perpendicular distance (as a fraction of tile size) within which a drag
- *  segment must pass a lattice corner to produce a diagonal step. */
-export const DRAG_CORNER_TOLERANCE_RATIO = 0.25;
+/** Arc length (as a fraction of tile size) a cardinal grid-line crossing is
+ *  held back, waiting for the other axis to cross so the pair can become one
+ *  diagonal step. Must exceed 1/√2 ≈ 0.707 so a 45° drag pairs its crossings
+ *  at every lattice offset, not only when it happens to hug corners. */
+export const DRAG_DIAGONAL_HOLD_RATIO = 0.75;
+
+/** A crossing pair only becomes a diagonal step if the drag was actually
+ *  heading diagonally: min/max of the heading's |dx|,|dy| must exceed
+ *  tan(22.5°), i.e. the direction is within 22.5° of a 45° diagonal. */
+const DIAGONAL_RATIO_MIN = Math.tan(Math.PI / 8);
+
+/** Arc length (fraction of tile size) over which the drag heading is
+ *  smoothed. Keeps per-frame wobble in a slow drag from flipping the
+ *  cardinal/diagonal decision back and forth. */
+const HEADING_SMOOTHING_RATIO = 0.35;
 
 const EPS = 1e-9;
 
+interface PendingStep {
+  gx: number;
+  gy: number;
+  /** Cumulative arc length at which the crossing happened. */
+  arc: number;
+  /** Hold window granted when the crossing happened: the full pairing window
+   *  if the drag was heading diagonally then, zero otherwise. Fixed at
+   *  creation so a wobble that flips the heading can't cut a window short. */
+  hold: number;
+}
+
 /**
- * Cells an 8-connected road drag visits while the cursor moves from (x0,y0)
- * to (x1,y1) in world pixels.
+ * Incremental tracer that converts a stream of cursor positions (world px)
+ * into the 8-connected cell steps a road drag should take.
  *
- * Amanatides–Woo grid traversal with a corner rule: the walk advances at the
- * segment's actual grid-line crossings, and when both an X and a Y crossing
- * remain ahead, it steps diagonally iff the segment passes within
- * `cornerTolerance` of the shared corner — a 45° drag through cell centers
- * yields clean diagonals, anything farther from the corner staircases.
+ * Cell accuracy comes from walking the exact grid-line crossings of each
+ * cursor segment (Amanatides–Woo). Diagonals come from pairing: while the
+ * drag is heading diagonally (smoothed over recent arc length), a crossing
+ * is held for up to `holdDistance`; when the other axis crosses inside that
+ * window the pair collapses into one diagonal step, and a crossing that is
+ * re-crossed inside it cancels silently. While the drag is heading straight
+ * there is nothing to pair, so crossings commit immediately and cardinal
+ * lines stay responsive.
  *
- * Returns visited cells in order, excluding the start cell; consecutive
- * entries always differ by a king move; the last entry is the end cell.
- * Zero-length segments return []. No bounds clamping — callers filter.
+ * Consecutive emitted steps always differ by a king move. The committed cell
+ * can trail the cursor by up to one held crossing; `flush()` commits it, so
+ * callers flush when the drag ends. No bounds clamping — callers filter.
  */
-export function traceDragCells(
-  x0: number, y0: number, x1: number, y1: number,
-  tileSize: number,
-  cornerTolerance: number = tileSize * DRAG_CORNER_TOLERANCE_RATIO,
-): GridPos[] {
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const len = Math.hypot(dx, dy);
-  if (len === 0) return [];
+export class DragTracer {
+  private px: number;
+  private py: number;
+  /** Cell the cursor is in (leads `committed` while a step is pending). */
+  private cursorX: number;
+  private cursorY: number;
+  private committedX: number;
+  private committedY: number;
+  private arc = 0;
+  private pending: PendingStep | null = null;
+  private headingX = 0;
+  private headingY = 0;
+  private readonly tileSize: number;
+  private readonly holdDistance: number;
 
-  let cx = Math.floor(x0 / tileSize);
-  let cy = Math.floor(y0 / tileSize);
-  const ex = Math.floor(x1 / tileSize);
-  const ey = Math.floor(y1 / tileSize);
-  const stepX = Math.sign(dx);
-  const stepY = Math.sign(dy);
-
-  // Parameter t of the next grid-line crossing per axis, and t per full tile.
-  // A start exactly on a grid line crosses at t=0 when moving negative
-  // (the cell boundary is behind floor()'s cell), never when moving positive.
-  let tMaxX = Infinity;
-  let tDeltaX = Infinity;
-  if (dx !== 0) {
-    const firstX = (stepX > 0 ? cx + 1 : cx) * tileSize;
-    tMaxX = (firstX - x0) / dx;
-    tDeltaX = tileSize / Math.abs(dx);
-  }
-  let tMaxY = Infinity;
-  let tDeltaY = Infinity;
-  if (dy !== 0) {
-    const firstY = (stepY > 0 ? cy + 1 : cy) * tileSize;
-    tMaxY = (firstY - y0) / dy;
-    tDeltaY = tileSize / Math.abs(dy);
+  constructor(x: number, y: number, tileSize: number, holdDistance: number = tileSize * DRAG_DIAGONAL_HOLD_RATIO) {
+    this.px = x;
+    this.py = y;
+    this.tileSize = tileSize;
+    this.holdDistance = holdDistance;
+    this.cursorX = Math.floor(x / tileSize);
+    this.cursorY = Math.floor(y / tileSize);
+    this.committedX = this.cursorX;
+    this.committedY = this.cursorY;
   }
 
-  const out: GridPos[] = [];
-  const cap = Math.abs(ex - cx) + Math.abs(ey - cy) + 4;
-  for (let i = 0; i < cap && (cx !== ex || cy !== ey); i++) {
-    const crossX = tMaxX <= 1 + EPS;
-    const crossY = tMaxY <= 1 + EPS;
-    if (!crossX && !crossY) break;
+  /** Feed the next cursor position; returns the steps committed by it. */
+  advance(x: number, y: number): GridPos[] {
+    const steps: GridPos[] = [];
+    const dx = x - this.px;
+    const dy = y - this.py;
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return steps;
 
-    let diagonal = false;
-    if (crossX && crossY) {
-      const cornerX = (cx + (stepX > 0 ? 1 : 0)) * tileSize;
-      const cornerY = (cy + (stepY > 0 ? 1 : 0)) * tileSize;
-      const d = Math.abs(dx * (y0 - cornerY) - dy * (x0 - cornerX)) / len;
-      diagonal = d < cornerTolerance;
+    const tile = this.tileSize;
+    const stepX = Math.sign(dx);
+    const stepY = Math.sign(dy);
+    // A position exactly on a grid line belongs to the higher cell (floor),
+    // so a negative-direction crossing at the segment's very end is excluded
+    // while a positive-direction one counts.
+    const tLimitX = stepX > 0 ? 1 + EPS : 1 - EPS;
+    const tLimitY = stepY > 0 ? 1 + EPS : 1 - EPS;
+
+    let tMaxX = Infinity;
+    let tDeltaX = Infinity;
+    if (dx !== 0) {
+      const firstX = (stepX > 0 ? this.cursorX + 1 : this.cursorX) * tile;
+      tMaxX = (firstX - this.px) / dx;
+      tDeltaX = tile / Math.abs(dx);
+    }
+    let tMaxY = Infinity;
+    let tDeltaY = Infinity;
+    if (dy !== 0) {
+      const firstY = (stepY > 0 ? this.cursorY + 1 : this.cursorY) * tile;
+      tMaxY = (firstY - this.py) / dy;
+      tDeltaY = tile / Math.abs(dy);
     }
 
-    if (diagonal) {
-      cx += stepX;
-      cy += stepY;
-      tMaxX += tDeltaX;
-      tMaxY += tDeltaY;
-    } else if (crossX && (!crossY || tMaxX <= tMaxY)) {
-      cx += stepX;
-      tMaxX += tDeltaX;
-    } else {
-      cy += stepY;
-      tMaxY += tDeltaY;
+    // Smooth the heading over ~a third of a tile of recent movement
+    const weight = Math.min(1, len / (this.tileSize * HEADING_SMOOTHING_RATIO));
+    this.headingX += (dx / len - this.headingX) * weight;
+    this.headingY += (dy / len - this.headingY) * weight;
+    const small = Math.min(Math.abs(this.headingX), Math.abs(this.headingY));
+    const large = Math.max(Math.abs(this.headingX), Math.abs(this.headingY));
+    const headingDiagonal = large > 0 && small / large > DIAGONAL_RATIO_MIN;
+
+    // Cap: a segment of length len crosses at most len/tile + 2 lines per axis
+    const cap = Math.ceil((len / tile + 2) * 2);
+    for (let i = 0; i < cap; i++) {
+      const crossX = tMaxX <= tLimitX;
+      const crossY = tMaxY <= tLimitY;
+      if (!crossX && !crossY) break;
+
+      let eventArc: number;
+      if (crossX && (!crossY || tMaxX <= tMaxY)) {
+        eventArc = this.arc + tMaxX * len;
+        tMaxX += tDeltaX;
+        this.cursorX += stepX;
+      } else {
+        eventArc = this.arc + tMaxY * len;
+        tMaxY += tDeltaY;
+        this.cursorY += stepY;
+      }
+      this.resolve(eventArc, headingDiagonal, steps);
     }
-    out.push({ gx: cx, gy: cy });
+
+    this.arc += len;
+    this.px = x;
+    this.py = y;
+
+    // A held crossing commits as a cardinal step once its window has passed
+    if (this.pending && this.arc - this.pending.arc > this.pending.hold) {
+      this.commitPending(steps);
+    }
+    return steps;
   }
 
-  // Float-precision safety: if the walk stopped one king move shy of the end
-  // cell, finish the path so the last entry is always the end cell.
-  if ((cx !== ex || cy !== ey) && Math.max(Math.abs(ex - cx), Math.abs(ey - cy)) === 1) {
-    out.push({ gx: ex, gy: ey });
+  /** Feed the final cursor position and commit any held crossing. */
+  flush(x: number, y: number): GridPos[] {
+    const steps = this.advance(x, y);
+    if (this.pending) this.commitPending(steps);
+    return steps;
   }
-  return out;
+
+  /** Commit a held crossing without advancing the cursor. */
+  flushPending(): GridPos[] {
+    const steps: GridPos[] = [];
+    if (this.pending) this.commitPending(steps);
+    return steps;
+  }
+
+  /** Reconcile committed/pending state after the cursor changed cells. */
+  private resolve(eventArc: number, headingDiagonal: boolean, steps: GridPos[]): void {
+    if (this.pending && eventArc - this.pending.arc > this.pending.hold) {
+      this.commitPending(steps);
+    }
+
+    const hold = headingDiagonal ? this.holdDistance : 0;
+    const dgx = this.cursorX - this.committedX;
+    const dgy = this.cursorY - this.committedY;
+
+    if (this.pending === null) {
+      // First crossing away from the committed cell: hold it
+      this.pending = { gx: this.cursorX, gy: this.cursorY, arc: eventArc, hold };
+      return;
+    }
+    if (dgx === 0 && dgy === 0) {
+      // Crossed back inside the window: jitter, no step
+      this.pending = null;
+      return;
+    }
+    if (dgx !== 0 && dgy !== 0 && Math.abs(dgx) === 1 && Math.abs(dgy) === 1) {
+      // The other axis crossed inside the window
+      if (headingDiagonal) {
+        this.committedX = this.cursorX;
+        this.committedY = this.cursorY;
+        this.pending = null;
+        steps.push({ gx: this.committedX, gy: this.committedY });
+      } else {
+        // Deliberate corner: keep the L shape
+        this.commitPending(steps);
+        this.pending = { gx: this.cursorX, gy: this.cursorY, arc: eventArc, hold };
+      }
+      return;
+    }
+    // Same axis crossed again: commit the held step and hold the new one
+    this.commitPending(steps);
+    this.pending = { gx: this.cursorX, gy: this.cursorY, arc: eventArc, hold };
+  }
+
+  private commitPending(steps: GridPos[]): void {
+    const pending = this.pending!;
+    this.committedX = pending.gx;
+    this.committedY = pending.gy;
+    this.pending = null;
+    steps.push({ gx: pending.gx, gy: pending.gy });
+  }
 }

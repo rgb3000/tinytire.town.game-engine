@@ -116,8 +116,11 @@ describe('RoadDrawer drag placement', () => {
 
     expect(connectionsAt(f.grid, 4, 1)).toBe(Direction.Left);
     expect(connectionsAt(f.grid, 3, 1)).toBe(Direction.Left | Direction.Right);
-    expect(cellTypeAt(f.grid, 5, 1)).toBe(CellType.Empty);
-    expect(f.getStock()).toBe(7);
+    // Dragging past the house starts a fresh stretch that its 1-connection cap
+    // keeps unconnected
+    expect(cellTypeAt(f.grid, 5, 1)).toBe(CellType.Road);
+    expect(connectionsAt(f.grid, 5, 1)).toBe(0);
+    expect(f.getStock()).toBe(6);
   });
 
   it('places nothing for a click that never leaves the start cell', () => {

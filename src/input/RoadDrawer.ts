@@ -7,7 +7,7 @@ import { CellType, Tool } from '../types';
 import { GRID_COLS, GRID_ROWS, TILE_SIZE } from '../constants';
 import { connectionCount, forEachDirection, directionFromDelta, opposite } from '../utils/direction';
 import { findRoadPlacementPath, isRoadPassable } from '../pathfinding/RoadPlacementPathfinder';
-import { traceDragCells } from './dragTrace';
+import { DragTracer } from './dragTrace';
 
 export interface InventorySlot {
   hasStock(count: number): boolean;
@@ -38,8 +38,7 @@ export class RoadDrawer {
 
   private prevPlacedPos: GridPos | null = null;
   private lastBuiltPos: GridPos | null = null;
-  private prevCanvasX: number | null = null;
-  private prevCanvasY: number | null = null;
+  private tracer: DragTracer | null = null;
   private redirectSource: GridPos | null = null;
   private pendingDragStart: GridPos | null = null;
   private panInterrupted = false;
@@ -94,6 +93,7 @@ export class RoadDrawer {
       // Reset drag state so we don't carry stale state into next tool switch
       this.wasLeftDown = this.input.state.leftDown;
       this.wasRightDown = this.input.state.rightDown;
+      this.tracer = null;
       return;
     }
 
@@ -111,8 +111,7 @@ export class RoadDrawer {
         // Starting a new left-click
         this.undoSystem?.beginGroup();
         const { canvasX: startCX, canvasY: startCY } = this.input.state;
-        this.prevCanvasX = startCX;
-        this.prevCanvasY = startCY;
+        this.tracer = new DragTracer(startCX, startCY, TILE_SIZE);
 
         const cell = this.grid.getCell(gridPos.gx, gridPos.gy);
 
@@ -172,20 +171,21 @@ export class RoadDrawer {
         // Camera pan with the button still held: hold the drag. The cursor's
         // world position jumps arbitrarily during a pan, so no cells are
         // processed and the segment origin re-anchors when the pan ends.
+        if (!this.panInterrupted && this.tracer) {
+          // Commit a crossing still held so the pan doesn't orphan it
+          this.applyDragSteps(this.tracer.flushPending());
+        }
         this.panInterrupted = true;
       } else {
         // Dragging — walk exactly the cells the cursor path crossed
         const { canvasX, canvasY } = this.input.state;
-        if (this.panInterrupted || this.prevCanvasX == null || this.prevCanvasY == null) {
+        if (this.panInterrupted || this.tracer === null) {
           // Re-anchor after a pan (or a press under another tool): no road
           // bridges the jump, drawing resumes from the current cursor
           this.panInterrupted = false;
-          this.prevCanvasX = canvasX;
-          this.prevCanvasY = canvasY;
+          this.tracer = new DragTracer(canvasX, canvasY, TILE_SIZE);
         } else {
-          this.applyDragSteps(traceDragCells(this.prevCanvasX, this.prevCanvasY, canvasX, canvasY, TILE_SIZE));
-          this.prevCanvasX = canvasX;
-          this.prevCanvasY = canvasY;
+          this.applyDragSteps(this.tracer.advance(canvasX, canvasY));
         }
       }
     }
@@ -218,6 +218,11 @@ export class RoadDrawer {
     }
 
     if (!leftDown && this.wasLeftDown) {
+      // Commit a crossing still held by the tracer before the group closes
+      if (this.tracer) {
+        this.applyDragSteps(this.tracer.flush(this.input.state.canvasX, this.input.state.canvasY));
+        this.tracer = null;
+      }
       this.undoSystem?.endGroup();
     }
     if (!rightDown && this.wasRightDown) {
@@ -227,8 +232,7 @@ export class RoadDrawer {
     if (!leftDown && !rightDown) {
       this.lastGridPos = null;
       this.prevPlacedPos = null;
-      this.prevCanvasX = null;
-      this.prevCanvasY = null;
+      this.tracer = null;
       this.redirectSource = null;
       this.pendingDragStart = null;
       this.panInterrupted = false;
@@ -264,8 +268,10 @@ export class RoadDrawer {
       const cell = this.grid.getCell(step.gx, step.gy);
       if (cell && (cell.type === CellType.House || cell.type === CellType.GasStation)) {
         if (this.tryConnectToEndpoint(step.gx, step.gy)) {
+          // Endpoints cap the chain; anything drawn past them starts a fresh,
+          // unconnected stretch (the endpoint's 1-connection cap enforces it)
           this.prevPlacedPos = { gx: step.gx, gy: step.gy };
-          return; // endpoints cap the chain; drop the rest of this trace
+          continue;
         }
         continue; // full or non-adjacent endpoint: leave the anchor in place
       }
