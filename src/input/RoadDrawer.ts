@@ -1,4 +1,4 @@
-import type { InputHandler } from './InputHandler';
+import type { InputState } from './InputHandler';
 import type { UndoSystem } from './UndoSystem';
 import type { RoadSystem } from '../systems/RoadSystem';
 import type { Grid } from '../core/Grid';
@@ -16,11 +16,21 @@ export interface InventorySlot {
   restore(count: number): void;
 }
 
+/** The slice of InputHandler that RoadDrawer reads — structural, so Node
+ *  tests can drive update() with a plain object instead of a DOM-bound
+ *  InputHandler. */
+export interface RoadDrawerInput {
+  readonly state: InputState;
+  panningActive: boolean;
+}
+
+type PlaceResult = 'placed' | 'reused' | 'blocked';
+
 export class RoadDrawer {
   private lastGridPos: GridPos | null = null;
   private wasLeftDown = false;
   private wasRightDown = false;
-  private input: InputHandler;
+  private input: RoadDrawerInput;
   private roadSystem: RoadSystem;
   private grid: Grid;
   private stock: InventorySlot;
@@ -43,7 +53,7 @@ export class RoadDrawer {
   onRescuePendingConnection: ((gx: number, gy: number, dir: number) => void) | null = null;
 
   constructor(
-    input: InputHandler, roadSystem: RoadSystem, grid: Grid,
+    input: RoadDrawerInput, roadSystem: RoadSystem, grid: Grid,
     stock: InventorySlot,
     _getHouses: () => unknown[],
     undoSystem: UndoSystem | null,
@@ -354,23 +364,31 @@ export class RoadDrawer {
     return { gx: lastPos.gx + off.gx, gy: lastPos.gy + off.gy };
   }
 
-  private tryPlace(gx: number, gy: number): void {
-    if (gx < 0 || gx >= GRID_COLS || gy < 0 || gy >= GRID_ROWS) return;
+  private tryPlace(gx: number, gy: number): PlaceResult {
+    if (gx < 0 || gx >= GRID_COLS || gy < 0 || gy >= GRID_ROWS) return 'blocked';
 
     const cell = this.grid.getCell(gx, gy);
     if (cell && cell.type === CellType.Road && cell.pendingDeletion) {
       this.undoSystem?.snapshotCellAndNeighbors(gx, gy);
       // Don't charge stock — rescue of specific connections happens in connectAndRescue
-      return;
+      return 'reused';
+    }
+    if (cell && (cell.type === CellType.Road || cell.type === CellType.Connector)) {
+      // Already drivable, nothing to place — but snapshot, because the
+      // follow-up connect mutates this cell's connections.
+      this.undoSystem?.snapshotCellAndNeighbors(gx, gy);
+      return 'reused';
     }
 
-    if (!this.stock.hasStock(1)) return;
+    if (!this.stock.hasStock(1)) return 'blocked';
     this.undoSystem?.snapshotCellAndNeighbors(gx, gy);
     if (this.roadSystem.placeRoad(gx, gy)) {
       this.stock.consume(1);
       this.undoSystem?.addInventoryDelta('roads', -1);
       this.onRoadPlace?.();
+      return 'placed';
     }
+    return 'blocked';
   }
 
   private tryErase(gx: number, gy: number): void {

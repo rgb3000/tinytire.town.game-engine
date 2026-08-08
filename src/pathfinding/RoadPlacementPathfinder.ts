@@ -18,7 +18,8 @@ const NEIGHBORS = [
   { dx: 1, dy: 1, cost: SQRT2, cardinal: false },   // DownRight
 ];
 
-function isPassable(grid: Grid, gx: number, gy: number): boolean {
+/** Passability rule shared by road-placement pathfinding and drag drawing. */
+export function isRoadPassable(grid: Grid, gx: number, gy: number): boolean {
   const cell = grid.getCell(gx, gy);
   if (!cell) return false;
   const t = cell.type;
@@ -81,14 +82,14 @@ export function findRoadPlacementPath(grid: Grid, start: GridPos, end: GridPos):
 
       // Check passability (start and end are always passable)
       const isEndpoint = ni === startIdx || ni === endIdx;
-      if (!isEndpoint && !isPassable(grid, nx, ny)) continue;
+      if (!isEndpoint && !isRoadPassable(grid, nx, ny)) continue;
 
       // Diagonal corner-cutting prevention
       if (!n.cardinal) {
-        const adj1Passable = isPassable(grid, current.gx + n.dx, current.gy) ||
+        const adj1Passable = isRoadPassable(grid, current.gx + n.dx, current.gy) ||
           (current.gy * cols + current.gx + n.dx) === startIdx ||
           (current.gy * cols + current.gx + n.dx) === endIdx;
-        const adj2Passable = isPassable(grid, current.gx, current.gy + n.dy) ||
+        const adj2Passable = isRoadPassable(grid, current.gx, current.gy + n.dy) ||
           ((current.gy + n.dy) * cols + current.gx) === startIdx ||
           ((current.gy + n.dy) * cols + current.gx) === endIdx;
         if (!adj1Passable || !adj2Passable) continue;
