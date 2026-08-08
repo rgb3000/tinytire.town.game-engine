@@ -17,6 +17,7 @@ import { LakeLayer } from './layers/LakeLayer';
 import { RoadDebugLayer } from './layers/RoadDebugLayer';
 import { CarRouteLayer } from './layers/CarRouteLayer';
 import { HighwayLayer } from './layers/HighwayLayer';
+import { createBackdropPlane } from './backdrop';
 import type { HighwaySystem } from '../systems/HighwaySystem';
 import type { HighwayPlacementState } from '../input/HighwayDrawer';
 import { Tool } from '../types';
@@ -183,12 +184,13 @@ export class Renderer {
     this.groundMesh.castShadow = true;
     this.scene.add(this.groundMesh);
 
-    // Large background plane beneath ground to fill viewport when tilted/rotated
+    // Large background plane beneath ground to fill viewport when tilted/rotated.
+    //
+    // y = -0.01 is under the ground plane but *above* every lake terrace below the water
+    // surface, so this cannot be left to depth-sort against the scene — see `backdrop.ts`
+    // for why it draws first and writes no depth.
     const bgSize = Math.max(CANVAS_WIDTH, CANVAS_HEIGHT) * 4;
-    const bgGeom = new THREE.PlaneGeometry(bgSize, bgSize);
-    bgGeom.rotateX(-Math.PI / 2);
-    const bgMat = new THREE.MeshBasicMaterial({ color: '#FFFFFF' });
-    this.bgPlaneMesh = new THREE.Mesh(bgGeom, bgMat);
+    this.bgPlaneMesh = createBackdropPlane(bgSize, '#FFFFFF');
     this.bgPlaneMesh.position.set(CANVAS_WIDTH / 2, -0.01, CANVAS_HEIGHT / 2);
     this.scene.add(this.bgPlaneMesh);
 
