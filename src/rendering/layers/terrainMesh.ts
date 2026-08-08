@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GROUND_Y_POSITION } from '../../constants';
 import type { NestedPolygon, TerraceLevel } from '../../terrain';
-import { pointInPolygon, signedArea } from '../../terrain';
+import { ensureWinding, pointInPolygon, signedArea } from '../../terrain';
 
 export interface TerraceMeshOptions {
   /** +1 builds upward (mountains), -1 downward (water). */
@@ -58,10 +58,13 @@ export function makeShape(outer: number[][], holes: number[][][]): THREE.Shape {
 /**
  * Build the stack of extruded terrace rings.
  *
- * Each level punches holes for its own interior loops *and* for the level above nested
- * inside it, so what renders is a ring rather than a stack of overlapping solids. The old
- * code guessed the inner boundary by insetting the outer loop, which is what folded inside
- * out on narrow shapes; here the inner boundary is simply the next contour.
+ * Each level renders the ground that belongs to it and no more: its own polygons with the
+ * level above subtracted, so what renders is a ring rather than a stack of overlapping
+ * solids. The old code guessed the inner boundary by insetting the outer loop, which is what
+ * folded inside out on narrow shapes; here the inner boundary is simply the next contour.
+ *
+ * A level may need more than one shape per polygon — see `ringShapes` — so the mesh count is
+ * not the polygon count. Every shape a level produces shares that level's single material.
  */
 export function buildTerraceMeshes(
   levels: TerraceLevel[],
@@ -77,22 +80,23 @@ export function buildTerraceMeshes(
     materials.push(material);
 
     for (const polygon of levels[i].polygons) {
-      const shape = makeShape(polygon.outer, [...polygon.holes, ...cutoutsInside(above, polygon)]);
-      const geometry = new THREE.ExtrudeGeometry(shape, {
-        depth: options.stepHeight,
-        bevelEnabled: false,
-      });
-      // Shape is in XY, extruded along +Z. Rotating lays it into XZ with the extrusion
-      // running along -Y, which makes `position.y` the mesh's *top* face.
-      geometry.rotateX(Math.PI / 2);
+      for (const shape of ringShapes(polygon, above)) {
+        const geometry = new THREE.ExtrudeGeometry(shape, {
+          depth: options.stepHeight,
+          bevelEnabled: false,
+        });
+        // Shape is in XY, extruded along +Z. Rotating lays it into XZ with the extrusion
+        // running along -Y, which makes `position.y` the mesh's *top* face.
+        geometry.rotateX(Math.PI / 2);
 
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.y =
-        GROUND_Y_POSITION + options.direction * (i + options.baseOffset) * options.stepHeight;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      options.decorate?.(mesh, i);
-      meshes.push(mesh);
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.y =
+          GROUND_Y_POSITION + options.direction * (i + options.baseOffset) * options.stepHeight;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        options.decorate?.(mesh, i);
+        meshes.push(mesh);
+      }
     }
   }
 
@@ -114,13 +118,11 @@ export function buildFlatRing(
   const geometries: THREE.ExtrudeGeometry[] = [];
 
   for (const polygon of polygons) {
-    const shape = makeShape(
-      polygon.outer,
-      [...polygon.holes, ...cutoutsInside(innerCutouts, polygon)],
-    );
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.1, bevelEnabled: false });
-    geometry.rotateX(Math.PI / 2);
-    geometries.push(geometry);
+    for (const shape of ringShapes(polygon, innerCutouts)) {
+      const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.1, bevelEnabled: false });
+      geometry.rotateX(Math.PI / 2);
+      geometries.push(geometry);
+    }
   }
 
   // One mesh per contour, parented to the first, so the whole ring moves and is disposed as
@@ -137,15 +139,52 @@ export function buildFlatRing(
 }
 
 /**
- * The outer loops of `candidates` that fall inside `polygon`, ready to be punched out of it.
+ * `polygon` with the *regions* of every cutout nested inside it removed.
  *
- * Containment is decided on the candidate's first vertex: contours at different thresholds
- * never cross, so one vertex settles the whole loop. The returned arrays are the callers'
- * own — `ensureWinding` hands back its input unchanged when the winding already matches, so
- * these may alias loops the caller still holds. Nothing here writes to them.
+ * A cutout region is its outer loop minus its own holes, and subtracting one can leave two
+ * disjoint bands, so this returns a list rather than a single shape. Take an annulus — a
+ * mountain with a crater. Level 1's outer is smaller than level 0's, but level 1's *hole* is
+ * larger, since the crater widens as it deepens. Level 0's ground is then the band outside
+ * level 1's outer plus a second band inside level 1's hole, and the naive rule (punch the
+ * polygon's own holes and each cutout's outer) gets both wrong: level 0's own hole ends up
+ * nested inside the punched level-1 outer, which earcut cannot triangulate, and the inner
+ * band is never emitted at all.
+ *
+ * So, for cutouts `Q*` nested inside `polygon`:
+ *
+ * - one shape bounded by `polygon.outer`, punched with every `Q.outer` plus those of
+ *   `polygon.holes` that no `Q.outer` has already removed;
+ * - one further shape per hole `H` of each `Q`, bounded by `H` and punched with those of
+ *   `polygon.holes` that fall inside `H`.
+ *
+ * Containment is decided on a loop's first vertex: contours at different thresholds never
+ * cross, so one vertex settles the whole loop. Loops are only ever read and passed on —
+ * `ensureWinding` hands back its input unchanged when the winding already matches, so these
+ * may alias loops the caller still holds, and nothing here writes to them.
  */
-function cutoutsInside(candidates: NestedPolygon[], polygon: NestedPolygon): number[][][] {
-  return candidates
-    .filter(candidate => pointInPolygon(candidate.outer[0], polygon.outer))
-    .map(candidate => candidate.outer);
+function ringShapes(polygon: NestedPolygon, cutouts: NestedPolygon[]): THREE.Shape[] {
+  const inside = cutouts.filter(cutout => pointInPolygon(cutout.outer[0], polygon.outer));
+
+  const shapes = [
+    makeShape(polygon.outer, [
+      ...inside.map(cutout => cutout.outer),
+      ...polygon.holes.filter(hole => !inside.some(c => pointInPolygon(hole[0], c.outer))),
+    ]),
+  ];
+
+  for (const cutout of inside) {
+    for (const hole of cutout.holes) {
+      // `makeShape` may index into an outer loop unguarded, so the zero-area check that
+      // protects it there has to happen here too — this hole is about to become one.
+      if (Math.abs(signedArea(hole)) < MIN_HOLE_AREA) continue;
+      // A hole is wound the opposite way to an outer loop; promoting one to an outer loop
+      // without flipping it back would leave this band's extruded walls facing inward.
+      shapes.push(makeShape(
+        ensureWinding(hole, true),
+        polygon.holes.filter(own => pointInPolygon(own[0], hole)),
+      ));
+    }
+  }
+
+  return shapes;
 }

@@ -82,6 +82,41 @@ function expectFootprint(mesh: THREE.Mesh, x0: number, z0: number, size: number)
   ]) expect(actual).toBeCloseTo(expected, 4);
 }
 
+/**
+ * How many of the mesh's cap triangles cover `(x, z)`.
+ *
+ * Area alone cannot prove a shape was punched correctly — Three silently ignores a hole that
+ * lies outside its shape, and a hole nested inside another hole triangulates into something
+ * whose area may still come out plausible. Asking which points are actually covered, and how
+ * often, is the assertion that pins the geometry down: 0 where the level has no ground, 1
+ * where it does, never 2.
+ */
+function coverCount(mesh: THREE.Mesh, x: number, z: number): number {
+  const position = mesh.geometry.getAttribute('position');
+  let count = 0;
+
+  for (let t = 0; t < position.count; t += 3) {
+    const ys = [position.getY(t), position.getY(t + 1), position.getY(t + 2)];
+    if (ys.some(y => Math.abs(y) > 1e-6)) continue;
+
+    const ax = position.getX(t), az = position.getZ(t);
+    const bx = position.getX(t + 1), bz = position.getZ(t + 1);
+    const cx = position.getX(t + 2), cz = position.getZ(t + 2);
+    const d1 = (x - bx) * (az - bz) - (ax - bx) * (z - bz);
+    const d2 = (x - cx) * (bz - cz) - (bx - cx) * (z - cz);
+    const d3 = (x - ax) * (cz - az) - (cx - ax) * (z - az);
+    const negative = d1 < 0 || d2 < 0 || d3 < 0;
+    const positive = d1 > 0 || d2 > 0 || d3 > 0;
+    if (!(negative && positive)) count++;
+  }
+  return count;
+}
+
+/** Whether `(x, z)` falls inside any of `meshes`, and how many of them claim it. */
+function coverCountAcross(meshes: THREE.Mesh[], x: number, z: number): number {
+  return meshes.reduce((total, mesh) => total + coverCount(mesh, x, z), 0);
+}
+
 /** World-space top of a mesh: its own y plus the geometry's highest local y. */
 function topY(mesh: THREE.Mesh): number {
   mesh.geometry.computeBoundingBox();
@@ -212,6 +247,137 @@ describe('buildTerraceMeshes nesting', () => {
     const before = JSON.stringify(stack);
     buildTerraceMeshes(stack, { ...mountain, makeMaterial });
     expect(JSON.stringify(stack)).toBe(before);
+  });
+});
+
+/**
+ * A mountain with a crater: two terrace levels whose loops nest outside-in as
+ * `L0.outer ⊃ L1.outer ⊃ L1.hole ⊃ L0.hole`.
+ *
+ * That ordering is the whole point. As the terrain rises its silhouette shrinks *and* its
+ * crater widens, so the upper level's hole is the *bigger* one and the lower level's hole
+ * sits inside it. Level 0's ground is therefore two disjoint bands, and its own hole has
+ * already been removed by the time level 1's outer is punched out.
+ */
+function annulus(): TerraceLevel[] {
+  return levels(
+    [polygon(square(0, 0, 20), [holeSquare(8, 8, 4)])],
+    [polygon(square(2, 2, 16), [holeSquare(6, 6, 8)])],
+  );
+}
+
+/** Inside the closed square `[x0, x0 + size]²`. */
+function inSquare(x: number, z: number, x0: number, size: number): boolean {
+  return x >= x0 && x <= x0 + size && z >= x0 && z <= x0 + size;
+}
+
+describe('buildTerraceMeshes with holed levels', () => {
+  it('splits a level into two bands when the level above has a hole', () => {
+    const { meshes } = buildTerraceMeshes(annulus(), { ...mountain, makeMaterial });
+
+    // Level 0 is two bands — outside level 1, and inside level 1's crater — then level 1.
+    expect(meshes).toHaveLength(3);
+    expect(capArea(meshes[0].geometry)).toBeCloseTo(400 - 256, 4);
+    expect(capArea(meshes[1].geometry)).toBeCloseTo(64 - 16, 4);
+    // Level 0's region minus level 1's region, exactly: (400 − 16) − (256 − 64).
+    const level0 = capArea(meshes[0].geometry) + capArea(meshes[1].geometry);
+    expect(level0).toBeCloseTo((400 - 16) - (256 - 64), 4);
+    expect(capArea(meshes[2].geometry)).toBeCloseTo(256 - 64, 4);
+  });
+
+  it('puts the inner band inside the crater, not merely somewhere of that area', () => {
+    const { meshes } = buildTerraceMeshes(annulus(), { ...mountain, makeMaterial });
+
+    // Three ignores a hole lying outside its shape, so area alone would pass even if this
+    // band were built from the wrong loops. The footprint is the loop identity.
+    expectFootprint(meshes[0], 0, 0, 20);
+    expectFootprint(meshes[1], 6, 6, 8);
+  });
+
+  it('does not punch a hole that a punched cutout has already removed', () => {
+    const { meshes } = buildTerraceMeshes(annulus(), { ...mountain, makeMaterial });
+
+    // Level 0's own hole sits inside level 1's outer. Punching it again would nest a hole
+    // inside a hole, which earcut cannot triangulate; the outer band must not mention it.
+    expect(capArea(meshes[0].geometry)).toBeCloseTo(400 - 256, 4);
+    expect(coverCount(meshes[0], 10, 10)).toBe(0);
+    expect(coverCount(meshes[0], 4, 4)).toBe(0);
+    // Off the corner diagonal, where two triangles legitimately share the sample point.
+    expect(coverCount(meshes[0], 1, 0.5)).toBe(1);
+  });
+
+  it('covers the ground between the two levels exactly once, and nothing else', () => {
+    const { meshes } = buildTerraceMeshes(annulus(), { ...mountain, makeMaterial });
+    const level0 = [meshes[0], meshes[1]];
+
+    // Sampled on half-unit centres offset off every loop coordinate, so no sample lands on a
+    // boundary. A nested hole shows up as coverage inside level 0's own hole or as a missing
+    // inner band; a hole punched outside its shape shows up as coverage under level 1.
+    for (let i = 0; i < 40; i++) {
+      for (let j = 0; j < 40; j++) {
+        const x = 0.13 + i * 0.5;
+        const z = 0.27 + j * 0.5;
+        const inLevel0 = inSquare(x, z, 0, 20) && !inSquare(x, z, 8, 4);
+        const inLevel1 = inSquare(x, z, 2, 16) && !inSquare(x, z, 6, 8);
+        expect({ x, z, cover: coverCountAcross(level0, x, z) })
+          .toEqual({ x, z, cover: inLevel0 && !inLevel1 ? 1 : 0 });
+      }
+    }
+  });
+
+  it('decomposes every level of a three-level crater', () => {
+    const stack = levels(
+      [polygon(square(0, 0, 24), [holeSquare(10, 10, 4)])],
+      [polygon(square(2, 2, 20), [holeSquare(8, 8, 8)])],
+      [polygon(square(4, 4, 16), [holeSquare(6, 6, 12)])],
+    );
+    const { meshes } = buildTerraceMeshes(stack, { ...mountain, makeMaterial });
+
+    expect(meshes).toHaveLength(5);
+    const areas = meshes.map(m => capArea(m.geometry));
+    expect(areas[0] + areas[1]).toBeCloseTo((576 - 16) - (400 - 64), 4);
+    expect(areas[2] + areas[3]).toBeCloseTo((400 - 64) - (256 - 144), 4);
+    expect(areas[4]).toBeCloseTo(256 - 144, 4);
+    for (const mesh of meshes) expect(hasNaN(mesh.geometry)).toBe(false);
+  });
+
+  it('gives every band of a level that level height, material and index', () => {
+    const decorated: number[] = [];
+    const { meshes, materials } = buildTerraceMeshes(annulus(), {
+      ...mountain,
+      makeMaterial,
+      decorate: (_mesh, level) => decorated.push(level),
+    });
+
+    expect(decorated).toEqual([0, 0, 1]);
+    expect(materials).toHaveLength(2);
+    expect(meshes[1].material).toBe(meshes[0].material);
+    expect(meshes[2].material).not.toBe(meshes[0].material);
+    expect(meshes.map(m => m.position.y)).toEqual([
+      GROUND_Y_POSITION + 12,
+      GROUND_Y_POSITION + 12,
+      GROUND_Y_POSITION + 24,
+    ]);
+  });
+
+  it('does not mutate the loops it is handed', () => {
+    const stack = annulus();
+    const before = JSON.stringify(stack);
+    buildTerraceMeshes(stack, { ...mountain, makeMaterial });
+    expect(JSON.stringify(stack)).toBe(before);
+  });
+
+  it('ignores a cutout hole that bounds no area', () => {
+    const stack = levels(
+      [polygon(square(0, 0, 20))],
+      [polygon(square(2, 2, 16), [[[6, 6], [8, 6], [10, 6], [6, 6]]])],
+    );
+    const { meshes } = buildTerraceMeshes(stack, { ...mountain, makeMaterial });
+
+    // The collinear loop would otherwise become a band's outer boundary, which `makeShape`
+    // indexes into unguarded.
+    expect(meshes).toHaveLength(2);
+    expect(capArea(meshes[0].geometry)).toBeCloseTo(400 - 256, 4);
   });
 });
 
@@ -388,6 +554,23 @@ describe('buildFlatRing', () => {
       [],
     );
     expect(capArea(ring!.geometry)).toBeCloseTo(400 - 4, 4);
+  });
+
+  it('emits the band inside a cutout hole as a further contour', () => {
+    // A shoreline around a crater: the same two-band decomposition the terraces need, since
+    // the beach runs round the outside of the mountain *and* round the inside of its crater.
+    const ring = buildFlatRing(
+      [polygon(square(0, 0, 20), [holeSquare(8, 8, 4)])],
+      0,
+      material,
+      [polygon(square(2, 2, 16), [holeSquare(6, 6, 8)])],
+    );
+
+    expect(ring!.children).toHaveLength(1);
+    expect(capArea(ring!.geometry)).toBeCloseTo(400 - 256, 4);
+    const inner = ring!.children[0] as THREE.Mesh;
+    expect(capArea(inner.geometry)).toBeCloseTo(64 - 16, 4);
+    expectFootprint(inner, 6, 6, 8);
   });
 
   it('parents extra contours to the first so the ring moves and disposes as one', () => {
