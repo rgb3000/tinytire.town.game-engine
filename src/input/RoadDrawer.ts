@@ -3,12 +3,11 @@ import type { UndoSystem } from './UndoSystem';
 import type { RoadSystem } from '../systems/RoadSystem';
 import type { Grid } from '../core/Grid';
 import type { GridPos } from '../types';
-import { CellType, Direction, Tool } from '../types';
+import { CellType, Tool } from '../types';
 import { GRID_COLS, GRID_ROWS, TILE_SIZE } from '../constants';
 import { connectionCount, forEachDirection, directionFromDelta, opposite } from '../utils/direction';
-import { findRoadPlacementPath } from '../pathfinding/RoadPlacementPathfinder';
-
-const DRAG_THRESHOLD_SQ = (TILE_SIZE * 0.5) ** 2;
+import { findRoadPlacementPath, isRoadPassable } from '../pathfinding/RoadPlacementPathfinder';
+import { traceDragCells } from './dragTrace';
 
 export interface InventorySlot {
   hasStock(count: number): boolean;
@@ -42,10 +41,7 @@ export class RoadDrawer {
   private prevCanvasX: number | null = null;
   private prevCanvasY: number | null = null;
   private redirectSource: GridPos | null = null;
-  private lastDragDir: Direction | null = null;
   private pendingDragStart: GridPos | null = null;
-  private dragStartCanvasX: number | null = null;
-  private dragStartCanvasY: number | null = null;
 
   onRoadPlace: (() => void) | null = null;
   onRoadDelete: (() => void) | null = null;
@@ -114,12 +110,9 @@ export class RoadDrawer {
       if (!this.wasLeftDown) {
         // Starting a new left-click
         this.undoSystem?.beginGroup();
-        this.lastGridPos = { ...gridPos };
         const { canvasX: startCX, canvasY: startCY } = this.input.state;
         this.prevCanvasX = startCX;
         this.prevCanvasY = startCY;
-        this.dragStartCanvasX = startCX;
-        this.dragStartCanvasY = startCY;
 
         const cell = this.grid.getCell(gridPos.gx, gridPos.gy);
 
@@ -175,104 +168,18 @@ export class RoadDrawer {
             this.lastBuiltPos = { ...gridPos };
           }
         }
-      } else if (this.lastGridPos) {
-        // Dragging — interpolate between previous and current mouse positions
+      } else {
+        // Dragging — walk exactly the cells the cursor path crossed
         const { canvasX, canvasY } = this.input.state;
-        const prevCX = this.prevCanvasX ?? canvasX;
-        const prevCY = this.prevCanvasY ?? canvasY;
-
-        // Sample the mouse path between frames in steps of ~0.4 tiles
-        const mouseDist = Math.sqrt((canvasX - prevCX) ** 2 + (canvasY - prevCY) ** 2);
-        const stepSize = TILE_SIZE * 0.4;
-        const sampleCount = Math.max(1, Math.ceil(mouseDist / stepSize));
-
-        for (let s = 1; s <= sampleCount; s++) {
-          const t = s / sampleCount;
-          const sx = prevCX + (canvasX - prevCX) * t;
-          const sy = prevCY + (canvasY - prevCY) * t;
-
-          const nextCell = this.computeNextDragCell(this.lastGridPos, sx, sy);
-          if (!nextCell) continue;
-          if (nextCell.gx < 0 || nextCell.gx >= GRID_COLS || nextCell.gy < 0 || nextCell.gy >= GRID_ROWS) continue;
-
-          // Resolve deferred drag start: place the origin cell now that we've confirmed a drag direction
-          if (this.pendingDragStart) {
-            // Require actual mouse movement from press-down point, not just distance from cell center
-            const mdx = sx - (this.dragStartCanvasX ?? sx);
-            const mdy = sy - (this.dragStartCanvasY ?? sy);
-            if (mdx * mdx + mdy * mdy < DRAG_THRESHOLD_SQ) continue;
-
-            const start = this.pendingDragStart;
-            this.pendingDragStart = null;
-            this.tryPlace(start.gx, start.gy);
-            this.prevPlacedPos = { ...start };
-            this.lastBuiltPos = { ...start };
-          }
-
-          // Handle connection redirect: dragging from a house/connector with existing road
-          if (this.redirectSource) {
-            const src = this.redirectSource;
-            const srcCell = this.grid.getCell(src.gx, src.gy);
-            const targetCell = this.grid.getCell(nextCell.gx, nextCell.gy);
-            if (srcCell && targetCell && (targetCell.type === CellType.Empty || targetCell.type === CellType.Road)) {
-              // Must be adjacent to the redirect source
-              const ddx = nextCell.gx - src.gx;
-              const ddy = nextCell.gy - src.gy;
-              if (Math.max(Math.abs(ddx), Math.abs(ddy)) === 1) {
-                const oldRoad = this.findExternalRoadNeighbor(src.gx, src.gy);
-                if (oldRoad) {
-                  // Snapshot for undo
-                  this.undoSystem?.snapshotCellAndNeighbors(oldRoad.gx, oldRoad.gy);
-                  this.undoSystem?.snapshotCellAndNeighbors(src.gx, src.gy);
-                  this.undoSystem?.snapshotCellAndNeighbors(nextCell.gx, nextCell.gy);
-
-                  // Disconnect source from old road (don't delete the road cell)
-                  const oldDir = directionFromDelta(oldRoad.gx - src.gx, oldRoad.gy - src.gy);
-                  srcCell.roadConnections &= ~oldDir;
-                  const oldRoadCell = this.grid.getCell(oldRoad.gx, oldRoad.gy);
-                  if (oldRoadCell) {
-                    oldRoadCell.roadConnections &= ~opposite(oldDir);
-                  }
-                  this.roadSystem.markDirty();
-
-                  // Place new road only if target is empty (existing roads don't need placement)
-                  if (targetCell.type === CellType.Empty) {
-                    this.tryPlace(nextCell.gx, nextCell.gy);
-                  }
-                  this.connectAndRescue(src.gx, src.gy, nextCell.gx, nextCell.gy);
-
-                  this.redirectSource = null;
-                  this.prevPlacedPos = { ...nextCell };
-                  this.lastGridPos = { ...nextCell };
-                  this.lastBuiltPos = { ...nextCell };
-                  continue;
-                }
-              }
-            }
-            // If we dragged but couldn't redirect (e.g. not adjacent or not empty), skip
-            continue;
-          }
-
-          const c = this.grid.getCell(nextCell.gx, nextCell.gy);
-          if (c && (c.type === CellType.House || c.type === CellType.GasStation)) {
-            this.prevPlacedPos = this.lastGridPos;
-            if (this.tryConnectToEndpoint(nextCell.gx, nextCell.gy)) {
-              this.lastGridPos = { ...nextCell };
-              this.lastBuiltPos = { ...nextCell };
-              break;
-            }
-          }
-          this.tryPlace(nextCell.gx, nextCell.gy);
-          if (this.prevPlacedPos && (this.prevPlacedPos.gx !== nextCell.gx || this.prevPlacedPos.gy !== nextCell.gy)) {
-            this.connectAndRescue(this.prevPlacedPos.gx, this.prevPlacedPos.gy, nextCell.gx, nextCell.gy);
-          }
-          this.prevPlacedPos = { ...nextCell };
-          this.lastGridPos = { ...nextCell };
-          this.lastBuiltPos = { ...nextCell };
+        if (this.prevCanvasX == null || this.prevCanvasY == null) {
+          // No segment origin (e.g. the press happened under another tool): anchor only
+          this.prevCanvasX = canvasX;
+          this.prevCanvasY = canvasY;
+        } else {
+          this.applyDragSteps(traceDragCells(this.prevCanvasX, this.prevCanvasY, canvasX, canvasY, TILE_SIZE));
+          this.prevCanvasX = canvasX;
+          this.prevCanvasY = canvasY;
         }
-
-        this.prevCanvasX = canvasX;
-        this.prevCanvasY = canvasY;
       }
     }
 
@@ -316,52 +223,113 @@ export class RoadDrawer {
       this.prevCanvasX = null;
       this.prevCanvasY = null;
       this.redirectSource = null;
-      this.lastDragDir = null;
       this.pendingDragStart = null;
-      this.dragStartCanvasX = null;
-      this.dragStartCanvasY = null;
     }
 
     this.wasLeftDown = leftDown;
     this.wasRightDown = rightDown;
   }
 
-  private quantizeDirection(dx: number, dy: number, ratio: number): Direction {
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
-    if (adx > ratio * ady) return dx >= 0 ? Direction.Right : Direction.Left;
-    if (ady > ratio * adx) return dy >= 0 ? Direction.Down : Direction.Up;
-    if (dx > 0 && dy > 0) return Direction.DownRight;
-    if (dx > 0 && dy < 0) return Direction.UpRight;
-    if (dx < 0 && dy > 0) return Direction.DownLeft;
-    return Direction.UpLeft;
+  /** Apply traced drag steps to the grid. The chain anchor (`prevPlacedPos`)
+   *  advances only when a placement or connection actually succeeded, so a
+   *  blocked cell never silently breaks the chain's bookkeeping. */
+  private applyDragSteps(steps: GridPos[]): void {
+    for (const step of steps) {
+      if (step.gx < 0 || step.gx >= GRID_COLS || step.gy < 0 || step.gy >= GRID_ROWS) continue;
+
+      // Resolve the deferred drag start: the cursor has left the press cell
+      if (this.pendingDragStart) {
+        const start = this.pendingDragStart;
+        this.pendingDragStart = null;
+        if (this.tryPlace(start.gx, start.gy) !== 'blocked') {
+          this.prevPlacedPos = { ...start };
+          this.lastBuiltPos = { ...start };
+        }
+      }
+
+      // A pending redirect consumes steps until it resolves or the drag ends
+      if (this.redirectSource) {
+        this.tryRedirect(step);
+        continue;
+      }
+
+      const cell = this.grid.getCell(step.gx, step.gy);
+      if (cell && (cell.type === CellType.House || cell.type === CellType.GasStation)) {
+        if (this.tryConnectToEndpoint(step.gx, step.gy)) {
+          this.prevPlacedPos = { gx: step.gx, gy: step.gy };
+          return; // endpoints cap the chain; drop the rest of this trace
+        }
+        continue; // full or non-adjacent endpoint: leave the anchor in place
+      }
+
+      let from = this.prevPlacedPos;
+      const dx = from ? step.gx - from.gx : 0;
+      const dy = from ? step.gy - from.gy : 0;
+      if (from && dx !== 0 && dy !== 0 && Math.abs(dx) === 1 && Math.abs(dy) === 1) {
+        // Diagonal step: don't cut a blocked corner (same rule as the A* pathfinder).
+        const sideXOpen = isRoadPassable(this.grid, from.gx + dx, from.gy);
+        const sideYOpen = isRoadPassable(this.grid, from.gx, from.gy + dy);
+        if (!sideXOpen || !sideYOpen) {
+          const mid = sideXOpen ? { gx: from.gx + dx, gy: from.gy }
+            : sideYOpen ? { gx: from.gx, gy: from.gy + dy } : null;
+          if (mid && this.tryPlace(mid.gx, mid.gy) !== 'blocked') {
+            // Staircase through the open side, then treat the step as cardinal
+            this.connectAndRescue(from.gx, from.gy, mid.gx, mid.gy);
+            this.prevPlacedPos = mid;
+            this.lastBuiltPos = { ...mid };
+            from = mid;
+          } else {
+            from = null; // no legal way in: place the step cell unconnected
+          }
+        }
+      }
+
+      if (this.tryPlace(step.gx, step.gy) === 'blocked') continue;
+      if (from && (from.gx !== step.gx || from.gy !== step.gy)
+        && Math.max(Math.abs(step.gx - from.gx), Math.abs(step.gy - from.gy)) === 1) {
+        this.connectAndRescue(from.gx, from.gy, step.gx, step.gy);
+      }
+      this.prevPlacedPos = { gx: step.gx, gy: step.gy };
+      this.lastBuiltPos = { gx: step.gx, gy: step.gy };
+    }
   }
 
-  private computeNextDragCell(lastPos: GridPos, canvasX: number, canvasY: number): GridPos | null {
-    // Center of the current cell in world coordinates
-    const cx = (lastPos.gx + 0.5) * TILE_SIZE;
-    const cy = (lastPos.gy + 0.5) * TILE_SIZE;
-    const dx = canvasX - cx;
-    const dy = canvasY - cy;
-    const distSq = dx * dx + dy * dy;
+  /** Handle one drag step while a connection redirect from a house/connector
+   *  is pending. Places the new road before disconnecting the old one, so an
+   *  out-of-stock redirect leaves the existing connection untouched. */
+  private tryRedirect(target: GridPos): void {
+    const src = this.redirectSource!;
+    const srcCell = this.grid.getCell(src.gx, src.gy);
+    const targetCell = this.grid.getCell(target.gx, target.gy);
+    if (!srcCell || !targetCell) return;
+    if (targetCell.type !== CellType.Empty && targetCell.type !== CellType.Road) return;
+    // Must be adjacent to the redirect source
+    if (Math.max(Math.abs(target.gx - src.gx), Math.abs(target.gy - src.gy)) !== 1) return;
+    const oldRoad = this.findExternalRoadNeighbor(src.gx, src.gy);
+    if (!oldRoad) return;
 
-    if (distSq < DRAG_THRESHOLD_SQ) return null;
+    // Snapshot for undo
+    this.undoSystem?.snapshotCellAndNeighbors(oldRoad.gx, oldRoad.gy);
+    this.undoSystem?.snapshotCellAndNeighbors(src.gx, src.gy);
+    this.undoSystem?.snapshotCellAndNeighbors(target.gx, target.gy);
 
-    // Quantize direction to 8-way
-    let dir = this.quantizeDirection(dx, dy, 2);
+    // Place the new road first; existing roads don't need placement
+    if (this.tryPlace(target.gx, target.gy) === 'blocked') return;
 
-    // Hysteresis: if we have a previous direction, require a stricter threshold to switch
-    if (this.lastDragDir != null && dir !== this.lastDragDir) {
-      const strictDir = this.quantizeDirection(dx, dy, 3);
-      if (strictDir === this.lastDragDir) {
-        dir = this.lastDragDir;
-      }
+    // Disconnect source from the old road (don't delete the road cell)
+    const oldDir = directionFromDelta(oldRoad.gx - src.gx, oldRoad.gy - src.gy);
+    srcCell.roadConnections &= ~oldDir;
+    const oldRoadCell = this.grid.getCell(oldRoad.gx, oldRoad.gy);
+    if (oldRoadCell) {
+      oldRoadCell.roadConnections &= ~opposite(oldDir);
     }
+    this.roadSystem.markDirty();
 
-    this.lastDragDir = dir;
+    this.connectAndRescue(src.gx, src.gy, target.gx, target.gy);
 
-    const off = this.grid.getDirectionOffset(dir);
-    return { gx: lastPos.gx + off.gx, gy: lastPos.gy + off.gy };
+    this.redirectSource = null;
+    this.prevPlacedPos = { ...target };
+    this.lastBuiltPos = { ...target };
   }
 
   private tryPlace(gx: number, gy: number): PlaceResult {
