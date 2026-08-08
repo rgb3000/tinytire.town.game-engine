@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GROUND_Y_POSITION } from '../../constants';
 import type { NestedPolygon, TerraceLevel } from '../../terrain';
-import { ensureWinding, pointInPolygon, signedArea } from '../../terrain';
+import { nestLoops, pointInPolygon, signedArea } from '../../terrain';
 
 export interface TerraceMeshOptions {
   /** +1 builds upward (mountains), -1 downward (water). */
@@ -145,46 +145,57 @@ export function buildFlatRing(
  * disjoint bands, so this returns a list rather than a single shape. Take an annulus — a
  * mountain with a crater. Level 1's outer is smaller than level 0's, but level 1's *hole* is
  * larger, since the crater widens as it deepens. Level 0's ground is then the band outside
- * level 1's outer plus a second band inside level 1's hole, and the naive rule (punch the
- * polygon's own holes and each cutout's outer) gets both wrong: level 0's own hole ends up
+ * level 1's outer plus a second band inside level 1's hole, and the naive rule — punch the
+ * polygon's own holes and each cutout's outer — gets both wrong: level 0's own hole ends up
  * nested inside the punched level-1 outer, which earcut cannot triangulate, and the inner
  * band is never emitted at all.
  *
- * So, for cutouts `Q*` nested inside `polygon`:
+ * The subtraction is left to `nestLoops`, over the union of both sides' loops. A cutout's
+ * region is strictly inside `polygon`'s, so the boundary of the difference is exactly those
+ * loops and no others, and even-odd containment parity — which is all `nestLoops` does —
+ * sorts each one into the band it bounds. Spelling the cases out by hand instead works for a
+ * crater but rebuilds the original defect one level down: an island in that crater puts a
+ * cutout's *outer* inside a cutout's *hole*, and the hand-written rule punches it out of a
+ * shape it no longer belongs to. Parity has no such depth limit.
  *
- * - one shape bounded by `polygon.outer`, punched with every `Q.outer` plus those of
- *   `polygon.holes` that no `Q.outer` has already removed;
- * - one further shape per hole `H` of each `Q`, bounded by `H` and punched with those of
- *   `polygon.holes` that fall inside `H`.
+ * Cutouts are still filtered first, to those inside `polygon`'s *region* — inside its outer
+ * loop and outside its holes. Parity is only sound over loops that bound the difference, and
+ * `nestLoops` would read anything else as a further band and fill it in, painting the level
+ * below over ground that belongs to the level above. Testing the outer loop alone is not
+ * enough: the island in that crater is a polygon of *this* level too, sitting in one of its
+ * holes, and its own cutout is inside this outer loop while belonging to that polygon's ring
+ * rather than this one. Level polygons have disjoint regions, so each cutout lands on
+ * exactly one of them.
  *
- * Containment is decided on a loop's first vertex: contours at different thresholds never
- * cross, so one vertex settles the whole loop. Loops are only ever read and passed on —
- * `ensureWinding` hands back its input unchanged when the winding already matches, so these
- * may alias loops the caller still holds, and nothing here writes to them.
+ * `nestLoops` also winds what it returns — outers positive, holes negative — which matters
+ * because a band bounded by a cutout's hole is promoted from hole to outer boundary here.
+ * `ExtrudeGeometry` reverses a positive outer into its own convention and fixes the holes on
+ * the way; hand it a *negatively* wound outer and it leaves the holes alone, and that band's
+ * hole walls end up facing into the solid.
+ *
+ * Containment is decided on a loop's first vertex, here and in `nestLoops`: contours at
+ * different thresholds never cross, so one vertex settles the whole loop. Loops are only
+ * read and passed on, never written to — `nestLoops` copies a loop when it has to reverse
+ * one, and hands back the caller's own array when it does not.
  */
 function ringShapes(polygon: NestedPolygon, cutouts: NestedPolygon[]): THREE.Shape[] {
-  const inside = cutouts.filter(cutout => pointInPolygon(cutout.outer[0], polygon.outer));
+  const inside = cutouts.filter(cutout => inRegion(cutout.outer[0], polygon));
+  if (inside.length === 0) return [makeShape(polygon.outer, polygon.holes)];
 
-  const shapes = [
-    makeShape(polygon.outer, [
-      ...inside.map(cutout => cutout.outer),
-      ...polygon.holes.filter(hole => !inside.some(c => pointInPolygon(hole[0], c.outer))),
-    ]),
-  ];
+  const loops = [polygon.outer, ...polygon.holes];
+  for (const cutout of inside) loops.push(cutout.outer, ...cutout.holes);
 
-  for (const cutout of inside) {
-    for (const hole of cutout.holes) {
-      // `makeShape` may index into an outer loop unguarded, so the zero-area check that
-      // protects it there has to happen here too — this hole is about to become one.
-      if (Math.abs(signedArea(hole)) < MIN_HOLE_AREA) continue;
-      // A hole is wound the opposite way to an outer loop; promoting one to an outer loop
-      // without flipping it back would leave this band's extruded walls facing inward.
-      shapes.push(makeShape(
-        ensureWinding(hole, true),
-        polygon.holes.filter(own => pointInPolygon(own[0], hole)),
-      ));
-    }
-  }
+  return nestLoops(loops)
+    // `nestLoops` filters loops by point count, so a collinear one survives to become an
+    // outer boundary here. `makeShape` guards its *holes* by area but not its outer loop,
+    // and a zero-area outer extrudes into two coincident, back-to-back walls that z-fight
+    // under these layers' `DoubleSide` materials. Same reasoning as `MIN_HOLE_AREA` itself.
+    .filter(band => Math.abs(signedArea(band.outer)) >= MIN_HOLE_AREA)
+    .map(band => makeShape(band.outer, band.holes));
+}
 
-  return shapes;
+/** Inside `polygon`'s outer loop and outside every one of its holes. */
+function inRegion(point: number[], polygon: NestedPolygon): boolean {
+  return pointInPolygon(point, polygon.outer)
+    && !polygon.holes.some(hole => pointInPolygon(point, hole));
 }

@@ -117,6 +117,61 @@ function coverCountAcross(meshes: THREE.Mesh[], x: number, z: number): number {
   return meshes.reduce((total, mesh) => total + coverCount(mesh, x, z), 0);
 }
 
+/**
+ * Every half-unit sample over `[0, span]²` is covered by exactly one of `meshes` where
+ * `hasGround` says the level owns that point, and by none of them where it does not.
+ *
+ * Samples are offset off every loop coordinate in the fixtures, so none lands on a region
+ * boundary or on the diagonal a corner is triangulated along, where two triangles share it
+ * legitimately. Mismatches are collected rather than thrown one at a time: which points are
+ * wrong says what broke, where a first-failure message does not.
+ */
+function expectCoverMatches(
+  meshes: THREE.Mesh[], span: number, hasGround: (x: number, z: number) => boolean,
+): void {
+  const mismatches: string[] = [];
+  for (let i = 0; i * 0.5 < span; i++) {
+    for (let j = 0; j * 0.5 < span; j++) {
+      const x = 0.13 + i * 0.5;
+      const z = 0.27 + j * 0.5;
+      const want = hasGround(x, z) ? 1 : 0;
+      const got = coverCountAcross(meshes, x, z);
+      if (got !== want) mismatches.push(`(${x}, ${z}) want ${want} got ${got}`);
+    }
+  }
+  expect(mismatches).toEqual([]);
+}
+
+/**
+ * Mean x-component of the normals on the wall standing at `x = plane`, over `z ∈ [z0, z1]`.
+ *
+ * Winding is what decides which way an extruded wall faces, and a band built from a loop
+ * that arrives wound as a hole has to be flipped before it can serve as an outer boundary.
+ * `ExtrudeGeometry` normalises the outer contour itself, so that flip is invisible on the
+ * outer walls; it is the band's *hole* walls that end up facing the wrong way without it.
+ */
+function wallNormalX(mesh: THREE.Mesh, plane: number, z0: number, z1: number): number {
+  const position = mesh.geometry.getAttribute('position');
+  const normal = mesh.geometry.getAttribute('normal');
+  let total = 0;
+  let count = 0;
+
+  for (let t = 0; t < position.count; t += 3) {
+    let onPlane = true;
+    for (let k = 0; k < 3; k++) {
+      const z = position.getZ(t + k);
+      if (Math.abs(position.getX(t + k) - plane) > 1e-6) onPlane = false;
+      if (z < z0 - 1e-6 || z > z1 + 1e-6) onPlane = false;
+    }
+    if (!onPlane) continue;
+    for (let k = 0; k < 3; k++) total += normal.getX(t + k);
+    count += 3;
+  }
+
+  expect(count).toBeGreaterThan(0);
+  return total / count;
+}
+
 /** World-space top of a mesh: its own y plus the geometry's highest local y. */
 function topY(mesh: THREE.Mesh): number {
   mesh.geometry.computeBoundingBox();
@@ -266,6 +321,22 @@ function annulus(): TerraceLevel[] {
   );
 }
 
+/**
+ * A ring massif with an island standing in its crater.
+ *
+ * The crater floor drops below the footprint, so the island is a separate polygon of *both*
+ * levels, nested inside the ring's hole. Loops then nest six deep —
+ * `O0 ⊃ O1 ⊃ H1 ⊃ H0 ⊃ I0 ⊃ I1` — and a rule written for one level of nesting punches the
+ * island's level-1 contour out of the massif's band, where it does not belong. Reachable
+ * from the game: `ObstacleLayer` hands every mountain cell to `buildTerrainContours` at once.
+ */
+function craterIsland(): TerraceLevel[] {
+  return levels(
+    [polygon(square(0, 0, 24), [holeSquare(8, 8, 8)]), polygon(square(10, 10, 4))],
+    [polygon(square(2, 2, 20), [holeSquare(6, 6, 12)]), polygon(square(11, 11, 2))],
+  );
+}
+
 /** Inside the closed square `[x0, x0 + size]²`. */
 function inSquare(x: number, z: number, x0: number, size: number): boolean {
   return x >= x0 && x <= x0 + size && z >= x0 && z <= x0 + size;
@@ -308,21 +379,52 @@ describe('buildTerraceMeshes with holed levels', () => {
 
   it('covers the ground between the two levels exactly once, and nothing else', () => {
     const { meshes } = buildTerraceMeshes(annulus(), { ...mountain, makeMaterial });
-    const level0 = [meshes[0], meshes[1]];
 
-    // Sampled on half-unit centres offset off every loop coordinate, so no sample lands on a
-    // boundary. A nested hole shows up as coverage inside level 0's own hole or as a missing
-    // inner band; a hole punched outside its shape shows up as coverage under level 1.
-    for (let i = 0; i < 40; i++) {
-      for (let j = 0; j < 40; j++) {
-        const x = 0.13 + i * 0.5;
-        const z = 0.27 + j * 0.5;
-        const inLevel0 = inSquare(x, z, 0, 20) && !inSquare(x, z, 8, 4);
-        const inLevel1 = inSquare(x, z, 2, 16) && !inSquare(x, z, 6, 8);
-        expect({ x, z, cover: coverCountAcross(level0, x, z) })
-          .toEqual({ x, z, cover: inLevel0 && !inLevel1 ? 1 : 0 });
-      }
-    }
+    // A nested hole shows up as coverage inside level 0's own hole or as a missing inner
+    // band; a hole punched outside its shape shows up as coverage under level 1.
+    expectCoverMatches([meshes[0], meshes[1]], 20, (x, z) => {
+      const inLevel0 = inSquare(x, z, 0, 20) && !inSquare(x, z, 8, 4);
+      const inLevel1 = inSquare(x, z, 2, 16) && !inSquare(x, z, 6, 8);
+      return inLevel0 && !inLevel1;
+    });
+  });
+
+  it('faces a band hole wall into the void, like the wall around the band', () => {
+    const { meshes } = buildTerraceMeshes(annulus(), { ...mountain, makeMaterial });
+
+    // The inner band is solid between (6,6)-(14,14) and its hole (8,8)-(12,12), and both its
+    // walls should face out of that solid: −x on the boundary at x = 6, where the solid lies
+    // to the right, and +x on the hole at x = 8, where the solid lies to the left. The hole
+    // wall is the one that flips when the promoted loop keeps its hole winding.
+    expect(wallNormalX(meshes[1], 6, 6, 14)).toBeCloseTo(-1, 5);
+    expect(wallNormalX(meshes[1], 8, 8, 12)).toBeCloseTo(1, 5);
+  });
+
+  it('keeps the island out of the ring band when nesting runs deeper than one level', () => {
+    const { meshes } = buildTerraceMeshes(craterIsland(), { ...mountain, makeMaterial });
+
+    // The ring contributes two bands, the island one, then the level above does the same in
+    // reverse. The island's level-1 contour belongs to the island's ring, not the massif's:
+    // punching it out of the massif band would double-cover it and bury level 1 under 0.
+    expect(meshes).toHaveLength(5);
+    expect(meshes.map(m => capArea(m.geometry))).toEqual([
+      expect.closeTo(576 - 400, 4),
+      expect.closeTo(144 - 64, 4),
+      expect.closeTo(16 - 4, 4),
+      expect.closeTo(400 - 144, 4),
+      expect.closeTo(4, 4),
+    ]);
+  });
+
+  it('covers a crater island exactly once at every level', () => {
+    const { meshes } = buildTerraceMeshes(craterIsland(), { ...mountain, makeMaterial });
+    const level0 = (x: number, z: number) =>
+      (inSquare(x, z, 0, 24) && !inSquare(x, z, 8, 8)) || inSquare(x, z, 10, 4);
+    const level1 = (x: number, z: number) =>
+      (inSquare(x, z, 2, 20) && !inSquare(x, z, 6, 12)) || inSquare(x, z, 11, 2);
+
+    expectCoverMatches(meshes.slice(0, 3), 24, (x, z) => level0(x, z) && !level1(x, z));
+    expectCoverMatches(meshes.slice(3), 24, level1);
   });
 
   it('decomposes every level of a three-level crater', () => {
