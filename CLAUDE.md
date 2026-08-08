@@ -2,7 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-
 ## Project Overview
 
 The game engine behind [TinyTire.town](https://tinytire.town), an open-source Mini
@@ -68,7 +67,9 @@ Systems are stateful classes instantiated by `Game`:
 - **SpawnSystem** — Spawns houses/businesses over time with increasing frequency.
 - **DemandSystem** — Adds demand pins to businesses; triggers game over when max demand exceeded.
 - **CarSystem** — Moves cars along paths, handles lane-based traffic.
-- **RoadSystem** — Manages road/bridge placement and deletion.
+- **RoadSystem** — Manages road placement and deletion. There are no bridges, and roads
+  cannot cross water. Islands are reached by highway instead, which validates only its two
+  endpoints (`src/input/HighwayDrawer.ts`) and spans whatever lies between them.
 - **HighwaySystem / GasStationSystem** — Highway routing and refuelling.
 - **ObstacleSystem** — Generates mountains and lakes.
 - **PendingDeletionSystem** — Defers road removal until traffic has cleared.
@@ -84,6 +85,21 @@ The designer's *UI* is not here — this class is driven by whatever front end e
 ### Pathfinding (`src/pathfinding/`)
 
 A* pathfinder with octile distance heuristic. Results cached and invalidated when roads change.
+
+### Terrain (`src/terrain/`)
+
+Pure, canvas-free geometry. Terrain cells become a coverage field, then a signed distance
+field, then marching-squares isolines, and finally nested terrace polygons.
+
+Two properties are worth knowing. Terrace count derives from how thick a landform actually
+is — the deepest point of its distance field — and never from how many cells it contains, so
+a long thin ridge cannot be assigned rings it has no room for. And holes nest to any depth,
+resolved by containment parity rather than a single inside/outside test, which is what makes
+a lake with an island in it, or a mountain with a crater, expressible at all.
+
+`rendering/layers/` consumes this via `src/terrain/index.ts`. That barrel is internal:
+`src/index.ts` does not re-export any of it. Nothing under `src/terrain/` imports Three.js,
+so the whole pipeline is exercised directly by the Node-only suite.
 
 ### Rendering (`src/rendering/`)
 
@@ -105,6 +121,11 @@ CarLayer, HighwayLayer.
 - **Coordinate spaces**: Grid coords (`gx`, `gy`), pixel coords (grid × `TILE_SIZE`), screen coords.
 - **Enums as const objects**: `GameState`, `CellType`, `Direction` use `as const` objects.
   `erasableSyntaxOnly` is on, so real `enum`s are not available.
+- **Seeded generation**: `ObstacleSystem` takes an optional generation seed driving
+  `mulberry32` (`src/utils/rng.ts`) rather than calling `Math.random()` directly. Unseeded
+  construction still randomises, so gameplay stays varied; the seed exists so generated
+  terrain can be asserted on in tests. It is **not** a wire-format field — maps do not carry
+  one.
 - **No dependency injection or ECS**: Systems directly instantiated in `Game`'s constructor.
 
 ### Configuration
@@ -114,7 +135,11 @@ sizes) also in `constants.ts`.
 
 ## Testing
 
-Tests are Node-only: no DOM, no WebGL. Most of the engine is only observable through `Game`,
-which needs a canvas — so the suite covers the map format's round trip, config resolution,
-and the static constants guard. Behaviour that needs a canvas is verified by running the
-demo, not by a test.
+Tests are Node-only: no DOM, no WebGL. Much of the engine is only observable through `Game`,
+which needs a canvas, and that behaviour is still verified by running the demo rather than by
+a test.
+
+What the suite does cover is everything reducible to data: the map format's round trip,
+config resolution, the static constants guard, seeded obstacle generation, and the terrain
+geometry pipeline end to end. Importing Three.js under Node is fine — only the renderer needs
+a context — so the layers that merely build geometry are testable too, and are tested.
