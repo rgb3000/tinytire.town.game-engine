@@ -161,7 +161,6 @@ export class MapDesigner {
     this.roadDrawer = new RoadDrawer(
       this.input, this.roadSystem, this.grid,
       unlimitedStock,
-      () => this.spawnSystem.getHouses(),
       null,
       () => {
         if (this.activeTool === DesignerTool.Road) return Tool.Road;

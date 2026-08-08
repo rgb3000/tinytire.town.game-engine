@@ -26,7 +26,7 @@ function makeFixture(opts: { stock?: number } = {}) {
     gridPos: { gx: -1, gy: -1 }, canvasX: 0, canvasY: 0,
   };
   const input: RoadDrawerInput = { state, panningActive: false };
-  const drawer = new RoadDrawer(input, roadSystem, grid, slot, () => [], undoSystem, () => Tool.Road);
+  const drawer = new RoadDrawer(input, roadSystem, grid, slot, undoSystem, () => Tool.Road);
 
   const moveTo = (gx: number, gy: number) => {
     const { x, y } = center(gx, gy);

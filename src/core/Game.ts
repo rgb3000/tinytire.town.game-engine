@@ -211,7 +211,7 @@ export class Game {
     this.renderer.resize(window.innerWidth, window.innerHeight);
 
     this.undoSystem = new UndoSystem(this.grid);
-    this.roadDrawer = new RoadDrawer(this.input, this.roadSystem, this.grid, this.createInventorySlot('roads'), () => this.spawnSystem.getHouses(), this.undoSystem, () => this.activeTool);
+    this.roadDrawer = new RoadDrawer(this.input, this.roadSystem, this.grid, this.createInventorySlot('roads'), this.undoSystem, () => this.activeTool);
     this.roadDrawer.onTryErase = (gx, gy) => this.handleTryErase(gx, gy);
     this.roadDrawer.onRescuePendingConnection = (gx, gy, dir) => {
       this.pendingDeletionSystem.rescueConnection(gx, gy, dir);

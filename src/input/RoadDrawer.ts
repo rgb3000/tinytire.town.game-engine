@@ -52,7 +52,6 @@ export class RoadDrawer {
   constructor(
     input: RoadDrawerInput, roadSystem: RoadSystem, grid: Grid,
     stock: InventorySlot,
-    _getHouses: () => unknown[],
     undoSystem: UndoSystem | null,
     getActiveTool: () => Tool = () => Tool.Road,
   ) {
