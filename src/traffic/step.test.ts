@@ -25,9 +25,26 @@
  * inline wherever a test depends on them.
  */
 import { describe, it, expect, vi } from 'vitest';
+
+// A pass-through spy on `admit`, so one test can inspect the *shape* of the candidates the
+// stepper emits. Everything else behaves exactly as it would unmocked — `vi.fn` wraps the
+// real implementation — so this costs the other 29 tests nothing.
+//
+// Needed because the maneuver a candidate carries is not fully observable from outside: an
+// exit direction that is merely wrong produces *fewer* conflicts, and a junction that admits
+// too eagerly looks identical to one nobody contested. Behaviour can show a conflict was
+// found; only the candidate can show the right one was asked about.
+vi.mock('./junction', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./junction')>();
+  return { ...actual, admit: vi.fn(actual.admit) };
+});
+
 import { buildRoute, sampleRoute, segmentAt } from './route';
 import { LaneIndex } from './lanes';
+import { admit } from './junction';
+import type { JunctionCandidate } from './junction';
 import { step } from './step';
+import { Direction } from '../types';
 import { SegmentKind, VehicleMode, TrafficEventKind, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
 import { DEFAULT_IDM } from './tuning';
@@ -298,9 +315,38 @@ describe('step', () => {
     expect(find(w, 'a').arcDistance).toBeGreaterThan(100);
   });
 
+  it('offers a terminal junction a straight-through maneuver, not an arbitrary exit', () => {
+    // A route ending in a junction has no exit cell, so the exit direction is a choice. It
+    // must be `entry` — the vehicle continuing the way it came — because that is the only
+    // choice whose chord *contains* the ground the vehicle actually occupies. Any other
+    // fixed direction sweeps a chord across ground it never touches while leaving ground it
+    // does touch uncovered, so it misses real conflicts and admits crossing traffic on top
+    // of a stationary car. `Direction.Up` in place of `entry` misses 13 true conflicts and
+    // is invisible to every other test in this file, which is why this one reads the
+    // candidate rather than the outcome.
+    const w = createWorld();
+    addRoute(w, span('ends', [[0, 0, R], [1, 0, R], [2, 0, R], [3, 0, X]]));
+    w.vehicles.push(car('a', 'ends', 0, 40));
+
+    vi.mocked(admit).mockClear();
+    step(w, DT);
+
+    const calls = vi.mocked(admit).mock.calls;
+    // Premise: the terminal junction was put to `admit` at all, exactly once.
+    expect(calls.length).toBe(1);
+    const candidates = calls[0][0] as JunctionCandidate[];
+    expect(candidates.map(c => c.vehicleId)).toEqual(['a']);
+
+    // The route runs west to east, so entry is Right and a straight-through exit is Right.
+    expect(candidates[0].entry).toBe(Direction.Right);
+    expect(candidates[0].exit).toBe(Direction.Right);
+    expect(candidates[0].exit).toBe(candidates[0].entry);
+  });
+
   it('still makes a car entering a terminal junction yield to crossing traffic', () => {
-    // The straight-through maneuver the terminal case is offered with is what keeps it
-    // regulated. Waving it through unadmitted would fix the stall by removing the junction.
+    // Pins that a terminal junction is regulated at all — that a candidate and a stop line
+    // both exist, so the vehicle yields rather than being waved through. It does *not* pin
+    // the maneuver's shape; the test above does that, and neither subsumes the other.
     const w = createWorld();
     addRoute(w, span('ends', [[0, 3, R], [1, 3, R], [2, 3, R], [3, 3, X]]));
     addRoute(w, span('down', [[3, 1, R], [3, 2, R], [3, 3, X], [3, 4, R], [3, 5, R]]));

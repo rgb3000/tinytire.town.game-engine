@@ -123,9 +123,10 @@ export function nearestConstraint(
  * midpoints and the cell's kind from the segment at its *centre*; this takes both from the
  * segment at the arc itself. The two agree on every route of a single grid span and diverge
  * where a junction cell is the joint between two spans, which keeps a half-segment from each
- * side: this function covers the whole cell, `insideJunctionCell` covers it via the midpoint
- * extent, and reading the extent off the first half-segment — the obvious third option —
- * covers only half of it.
+ * side: at such a joint this function covers `(start, end]` — `segmentIndexAt` resolves the
+ * start boundary itself to the preceding road segment — `insideJunctionCell` covers the
+ * closed extent, and reading the extent off the first half-segment, the obvious third
+ * option, covers only half the cell.
  *
  * The stepper cannot use this one, because it must agree with `nextJunctionCell` above about
  * *which cells are junctions at all*. On a junction cell opening a grid span after a highway
