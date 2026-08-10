@@ -1521,7 +1521,7 @@ git commit -m "feat(traffic): resolve junctions by chord conflict and acyclic gr
 
 **Interfaces:**
 - Consumes: `LaneIndex` from `./lanes`; `Route`, `Vehicle`, `TrafficWorld` from `./types`.
-- Produces: `Constraint { arc: number; speed: number }`, `nearestConstraint(world, vehicle, index, admitted: Map<string, number>): Constraint`, `junctionKey(gx, gy): number`, `junctionEntryArc(route, cellIndex): number`.
+- Produces: `Constraint { arc: number; speed: number }`, `nearestConstraint(world, vehicle, index, admitted: Map<number, Set<string>>): Constraint`, `junctionKey(gx, gy): number`, `junctionEntryArc(route, cellIndex): number`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1690,7 +1690,7 @@ export function nearestConstraint(
   world: TrafficWorld,
   vehicle: Vehicle,
   index: LaneIndex,
-  admitted: Map<string, number>,
+  admitted: Map<number, Set<string>>,
 ): Constraint {
   const route = world.routes.get(vehicle.routeId);
   if (!route) return { arc: vehicle.arcDistance, speed: 0 };
@@ -1705,9 +1705,14 @@ export function nearestConstraint(
   }
 
   // A junction the vehicle has not been admitted to becomes a stop line at its boundary.
-  if (!admitted.has(vehicle.id)) {
-    const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
-    if (cellIndex >= 0) {
+  // The lookup runs unconditionally and admission is consulted **for that junction**:
+  // a flat "is this vehicle admitted" test would exempt a car from every stop line
+  // ahead, so a car admitted to A would sail through adjacent junction B.
+  const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
+  if (cellIndex >= 0) {
+    const cell = route.cells[cellIndex];
+    const admittedHere = admitted.get(junctionKey(cell.gx, cell.gy))?.has(vehicle.id) === true;
+    if (!admittedHere) {
       const stopArc = junctionEntryArc(route, cellIndex);
       if (stopArc < best.arc) best = { arc: stopArc, speed: 0 };
     }
@@ -1918,11 +1923,22 @@ import type { Route, TrafficEvent, TrafficWorld, Vehicle } from './types';
  * Segments are looked up by arc, not by cell index — see the note on `nextJunctionCell`
  * in `obstacles.ts`. The two arrays are not index-aligned.
  */
-function relevantJunctionCell(route: Route, arc: number): number {
+/** The junction cell the vehicle is physically inside, or -1. */
+function insideJunctionCell(route: Route, arc: number): number {
   for (let i = 0; i < route.cells.length; i++) {
     const seg = segmentAt(route, route.cellDist[i]);
     if (seg === null || seg.kind !== SegmentKind.Intersection) continue;
-    if (arc <= seg.endArc) return i;
+    if (arc >= seg.startArc && arc <= seg.endArc) return i;
+  }
+  return -1;
+}
+
+/** The first junction cell strictly ahead of `arc`, or -1. Mirrors `nextJunctionCell`. */
+function approachingJunctionCell(route: Route, arc: number): number {
+  for (let i = 0; i < route.cells.length; i++) {
+    if (route.cellDist[i] <= arc) continue;
+    const seg = segmentAt(route, route.cellDist[i]);
+    if (seg !== null && seg.kind === SegmentKind.Intersection) return i;
   }
   return -1;
 }
@@ -1951,28 +1967,43 @@ function exitHasRoom(world: TrafficWorld, route: Route, junctionCell: number): b
   return true;
 }
 
-function buildJunctionCandidates(world: TrafficWorld): Map<number, JunctionCandidate[]> {
+/**
+ * Offer every vehicle to the junctions that concern it.
+ *
+ * A vehicle produces **up to two** candidates, and emitting only one deadlocks adjacent
+ * junctions. A car mid-crossing A is bound by B's stop line (`nextJunctionCell` in
+ * `obstacles.ts` looks strictly ahead), so if it is offered only to A it can never be
+ * admitted to B, halts ~`s0` short of B's line while still inside A, and stays there
+ * forever — blocking A's cross traffic. Adjacent junction cells are ordinary:
+ * `_isIntersection` is `cardinalConnectionCount >= 3`.
+ *
+ * So: the junction it is **inside** gets it as `inside: true`, which keeps A reserved
+ * while the car physically occupies the box; the junction **ahead** gets it as an
+ * entrant, which is what lets it earn its way out.
+ */
+function buildJunctionCandidates(world: TrafficWorld): {
+  byJunction: Map<number, JunctionCandidate[]>;
+  /** Vehicle id -> the junction it is queueing for, if any. Drives arrival-time ageing. */
+  approaching: Map<string, number>;
+} {
   const byJunction = new Map<number, JunctionCandidate[]>();
+  const approaching = new Map<string, number>();
 
-  for (const v of world.vehicles) {
-    if (v.mode === VehicleMode.Parked) continue;
-    const route = world.routes.get(v.routeId);
-    if (!route) continue;
-
-    const cellIndex = relevantJunctionCell(route, v.arcDistance);
-    if (cellIndex < 0) continue;
-
+  const offer = (
+    world: TrafficWorld, v: Vehicle, route: Route, cellIndex: number, inside: boolean,
+  ): void => {
+    if (cellIndex < 0) return;
     const junction = route.cells[cellIndex];
     const before = route.cells[cellIndex - 1];
     const after = route.cells[cellIndex + 1];
-    if (before === undefined || after === undefined) continue;
+    if (before === undefined || after === undefined) return;
 
     const candidate: JunctionCandidate = {
       vehicleId: v.id,
       entry: getDirection(before, junction),
       exit: getDirection(junction, after),
-      inside: isInsideJunction(route, v.arcDistance),
-      arrivalTime: v.arrivalTime ?? world.time,
+      inside,
+      arrivalTime: v.arrivalTime,
       exitHasRoom: exitHasRoom(world, route, cellIndex),
     };
 
@@ -1980,9 +2011,26 @@ function buildJunctionCandidates(world: TrafficWorld): Map<number, JunctionCandi
     const list = byJunction.get(key);
     if (list) list.push(candidate);
     else byJunction.set(key, [candidate]);
+  };
+
+  for (const v of world.vehicles) {
+    if (v.mode === VehicleMode.Parked) continue;
+    const route = world.routes.get(v.routeId);
+    if (!route) continue;
+
+    const insideCell = insideJunctionCell(route, v.arcDistance);
+    const aheadCell = approachingJunctionCell(route, v.arcDistance);
+
+    offer(world, v, route, insideCell, true);
+    if (aheadCell !== insideCell) offer(world, v, route, aheadCell, false);
+
+    if (aheadCell >= 0 && aheadCell !== insideCell) {
+      const ahead = route.cells[aheadCell];
+      approaching.set(v.id, junctionKey(ahead.gx, ahead.gy));
+    }
   }
 
-  return byJunction;
+  return { byJunction, approaching };
 }
 
 interface Scratch {
@@ -2027,10 +2075,13 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
   // stop line ahead": adjacent cells can both be junctions (`_isIntersection` is
   // `cardinalConnectionCount >= 3`), so a car admitted to A would skip B's stop line and
   // exit straight into B's cross traffic.
-  const junctions = buildJunctionCandidates(world);
-  const admitted = new Map<string, number>();
-  for (const [key, candidates] of junctions) {
-    for (const id of admit(candidates)) admitted.set(id, key);
+  // Junction -> admitted vehicle ids. Keyed this way round because `admit` already
+  // returns exactly that set per junction, and because a car mid-crossing A while
+  // entering B is admitted to *both* — which a vehicle-keyed map cannot express.
+  const { byJunction, approaching } = buildJunctionCandidates(world);
+  const admitted = new Map<number, Set<string>>();
+  for (const [key, candidates] of byJunction) {
+    admitted.set(key, admit(candidates));
   }
 
   // Pass one: decide.
@@ -2086,7 +2137,15 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
 
     // Track how long this vehicle has been waiting, for the junction arrival-time key.
     // Set on the tick it first comes to rest unadmitted; cleared the moment it is let in.
-    if (admitted.has(v.id)) {
+    //
+    // Ages against the junction it is *queueing for*, never against admission in general.
+    // A car mid-crossing A while blocked at B is admitted to A every tick, so a flat
+    // "admitted anywhere" test would reset its clock forever and starve it at B — the
+    // arrival-time key is the whole anti-starvation mechanism, so it must age.
+    const queueingFor = approaching.get(v.id);
+    const admittedThere = queueingFor !== undefined
+      && admitted.get(queueingFor)?.has(v.id) === true;
+    if (queueingFor === undefined || admittedThere) {
       v.arrivalTime = 0;
     } else if (v.arrivalTime === 0 && v.speed <= STOPPED_SPEED) {
       v.arrivalTime = world.time;
