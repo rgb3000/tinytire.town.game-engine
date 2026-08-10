@@ -267,11 +267,49 @@ describe('admit', () => {
     // Give-way-to-the-right applies only to cars that arrived together. A car that has
     // been sitting at the line does not surrender its turn to every fresh arrival — that
     // is the whole mechanism by which a car passed over this tick wins the next one.
+    //
+    // Both times are non-zero on purpose. This test used to write the waiting car as
+    // `arrivalTime: 0`, which read correctly when zero sorted first but says the opposite
+    // now that zero is the sentinel for "has not begun waiting" — it would have been
+    // asserting that a car which never queued beats one that did. The property is unchanged
+    // and so is the shape of the assertion; only the encoding of "has been waiting longer"
+    // is now stated in the same units the stepper actually stamps.
     const got = admit([
-      candidate('a', Direction.Right, Direction.Right, { arrivalTime: 0 }),
-      candidate('b', Direction.Up, Direction.Up, { arrivalTime: 1 }),
+      candidate('a', Direction.Right, Direction.Right, { arrivalTime: 1 }),
+      candidate('b', Direction.Up, Direction.Up, { arrivalTime: 5 }),
     ]);
+    // Premise: they really are in conflict, so one of them has to lose.
+    expect(maneuversConflict(Direction.Right, Direction.Right, Direction.Up, Direction.Up))
+      .toBe(true);
     expect(got).toEqual(new Set(['a']));
+  });
+
+  it('makes a car that has not begun waiting yield to one that has', () => {
+    // `arrivalTime` is a sentinel, not a timestamp: zero means "not queued", and the stepper
+    // only stamps a vehicle once it comes to rest. Sorting zero *first* meant a car still
+    // rolling towards the junction — possibly seconds away, since candidacy has no approach
+    // horizon — outranked one that had been stopped at the line for a minute. A cross stream
+    // whose headway was shorter than its own approach then held a waiting car for ever:
+    // measured at 53.93s and still standing before this was fixed.
+    const got = admit([
+      candidate('rolling', Direction.Right, Direction.Right, { arrivalTime: 0 }),
+      candidate('queued', Direction.Up, Direction.Up, { arrivalTime: 30 }),
+    ]);
+    expect(got).toEqual(new Set(['queued']));
+  });
+
+  it('still admits a lone rolling car immediately, with nobody queued against it', () => {
+    // The other half of the sentinel: yielding to a queue must not become stopping at every
+    // junction. An uncontested car loses this key to nobody, so free flow is untouched.
+    expect(admit([candidate('rolling', Direction.Right, Direction.Right, { arrivalTime: 0 })]))
+      .toEqual(new Set(['rolling']));
+    // Two rolling cars in conflict still fall through to the rank and id tiebreaks rather
+    // than deadlocking on a shared sentinel.
+    const both = admit([
+      candidate('a', Direction.Right, Direction.Right, { arrivalTime: 0 }),
+      candidate('b', Direction.Up, Direction.Up, { arrivalTime: 0 }),
+    ]);
+    expect(both.size).toBe(1);
   });
 
   it('gives a car already inside absolute priority', () => {

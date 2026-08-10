@@ -515,7 +515,18 @@ describe('step: junction admission across two adjacent junctions', () => {
     expect(w.time).toBeGreaterThan(stamped + 1);
   });
 
-  it('clears the arrival time once the vehicle is admitted to the junction it waited at', () => {
+  it('keeps the arrival time through admission, and releases it past the last junction', () => {
+    // This test used to assert the opposite — that admission *cleared* the stamp — and that
+    // was the behaviour, until zero became the sentinel for "has not begun waiting" and so
+    // sorted last instead of first. Clearing on admission then dropped a car to the back of
+    // the queue the tick after it was let in: it edged forward, lost its turn, braked,
+    // stopped, re-stamped itself as the newest arrival, and repeated. Not a stall — it kept
+    // creeping, so a standstill bound could not see it — but a car took 41s to cross one
+    // junction, and the crossing-city sweep lost a third of its throughput behind the crawl.
+    //
+    // So the stamp now survives admission, which is what makes a queue a queue, and is
+    // released only when no junction is queued for at all. The property the old test
+    // protected — that the clock does not run for ever — is still asserted, at the end.
     const w = twoJunctionWorld();
     w.vehicles.push(car('x', 'down', 105));
     const blocker = car('blocker', 'down', 200, 0, VehicleMode.Parked);
@@ -523,12 +534,25 @@ describe('step: junction admission across two adjacent junctions', () => {
 
     for (let i = 0; i < 300; i++) step(w, DT);
     const x = find(w, 'x');
-    expect(x.arrivalTime).toBeGreaterThan(0);
+    const stamped = x.arrivalTime;
+    expect(stamped, 'it queued at B while the exit was blocked').toBeGreaterThan(0);
 
-    // Clear the exit and `x` is admitted to B, which is what resets the clock.
+    // Clear the exit: `x` is admitted to B and keeps its place while it crosses.
     w.vehicles.splice(w.vehicles.indexOf(blocker), 1);
     step(w, DT);
-    expect(x.arrivalTime).toBe(0);
+    expect(x.arrivalTime, 'admission does not cost it its turn').toBe(stamped);
+
+    // B's centre is at arc 160; `down` carries no junction beyond it.
+    let restamped = false;
+    for (let i = 0; i < 600 && x.arcDistance <= 160; i++) {
+      step(w, DT);
+      if (x.arrivalTime !== stamped && x.arrivalTime !== 0) restamped = true;
+    }
+    expect(x.arcDistance, 'it got through').toBeGreaterThan(160);
+    expect(restamped, 'and never had to re-queue behind a later arrival on the way').toBe(false);
+
+    for (let i = 0; i < 60; i++) step(w, DT);
+    expect(x.arrivalTime, 'with no junction left ahead, the clock is released').toBe(0);
   });
 
   it('admits a car standing inside a junction, so its stop line is never behind it', () => {
@@ -650,9 +674,19 @@ describe('step: L-shaped routes', () => {
       }
       const t = w.vehicles.find(v => v.id === 'turner');
       const s = w.vehicles.find(v => v.id === 'straighter');
-      // `straight`'s junction is cell 2, so its stop line is the midpoint of cellDist 40
-      // and 80. A car stationary short of that is one the junction actually held back.
+      // *One of them* must have been held at its own stop line — `straight`'s junction is
+      // cell 2, so its line is the midpoint of cellDist 40 and 80; `corner`'s is cell 3, so
+      // its line is the midpoint of 80 and 120. A car stationary short of its own line is
+      // one the junction actually held back.
+      //
+      // Deliberately no longer "straighter, specifically". Which of the two ends up waiting
+      // is decided by whichever slows below `STOPPED_SPEED` first and so claims the queue —
+      // with the arrival-time sentinel it is now the turner, and the straighter is released
+      // while still rolling at ~2px/s instead of being brought to a full stop. That is a
+      // better outcome, not the property under test: what the merge owes is that the two are
+      // serialised, not that a particular one loses.
       if (s !== undefined && s.speed < 1 && s.arcDistance < 60) heldAtTheLine = true;
+      if (t !== undefined && t.speed < 1 && t.arcDistance < 100) heldAtTheLine = true;
       if (t !== undefined && s !== undefined) {
         const a = sampleRoute(corner, t.arcDistance);
         const b = sampleRoute(straight, s.arcDistance);

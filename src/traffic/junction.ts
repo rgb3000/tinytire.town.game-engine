@@ -146,7 +146,24 @@ export function admit(candidates: JunctionCandidate[]): Set<string> {
     const rx = ranks.get(x.vehicleId)!;
     const ry = ranks.get(y.vehicleId)!;
     if (rx !== ry) return rx - ry;
-    if (x.arrivalTime !== y.arrivalTime) return x.arrivalTime - y.arrivalTime;
+    // Zero is the sentinel for "has not begun waiting", not a timestamp — so it must sort
+    // *last* on this key, not first.
+    //
+    // Reading it as an ordinary arrival time meant a car still rolling towards the junction
+    // outranked one that had been stopped at the line for a minute, since the stepper only
+    // stamps `arrivalTime` when a vehicle comes to rest. Nothing here bounds how far away a
+    // candidate may be, so a cross stream whose headway is shorter than its own approach
+    // travel time always had *somebody* upstream carrying a zero, and the waiting car was
+    // never let in: measured at 53.93 seconds and still standing, on a stream of one car
+    // every two seconds joining two cells out.
+    //
+    // The rule itself is unchanged — the earlier arrival still wins. Free flow is unchanged
+    // too: an uncontested rolling car is admitted immediately, because it can only lose this
+    // key to a car that is actually queued at the line. A contested one now yields to that
+    // queue, which is what a junction is for.
+    const ax = x.arrivalTime === 0 ? Infinity : x.arrivalTime;
+    const ay = y.arrivalTime === 0 ? Infinity : y.arrivalTime;
+    if (ax !== ay) return ax - ay;
     return x.vehicleId < y.vehicleId ? -1 : x.vehicleId > y.vehicleId ? 1 : 0;
   });
 

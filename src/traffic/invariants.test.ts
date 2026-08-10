@@ -390,7 +390,14 @@ function expectBusy(result: SweepResult, name: string, minArrivals: number): voi
 
 // --- the scenarios under sweep ------------------------------------------------------------
 
-const CORRIDOR_SEEDS = [1, 7, 42, 1337];
+/**
+ * Two seeds, not four. The four originally swept cost ~400ms of every CI run and differed
+ * only in initial spacing and speeds of the same corridor; vertical, L-shaped and
+ * nine-junction fixtures cover the shapes that actually differ. What is lost is two more
+ * samples of one shape — worth having if a future failure ever looks seed-dependent, and
+ * cheap to restore, since the sweep is parameterised by seed.
+ */
+const CORRIDOR_SEEDS = [1, 42];
 
 describe('traffic invariants', () => {
   it('builds the fixtures it claims to', () => {
@@ -685,25 +692,23 @@ describe('traffic invariants', () => {
   });
 
   /**
-   * A known defect, pinned as a failing expectation rather than left as prose.
+   * The regression test for the defect these sweeps found, and the reason `arrivalTime`'s
+   * zero is a sentinel rather than a timestamp.
    *
-   * Junction candidacy has **no approach horizon**: `approachingJunctionCell` offers a
-   * vehicle to the next junction ahead of it however far away that is, and a vehicle that has
-   * not yet stopped carries `arrivalTime === 0`, which sorts *earliest* — ahead of a car that
-   * has genuinely been waiting for a minute. So a cross stream whose headway is shorter than
-   * its own approach travel time keeps a waiting car out for ever.
+   * Junction candidacy has **no approach horizon**: `approachingJunctionCell` offers a vehicle
+   * to the next junction ahead however far away it is, and the stepper only stamps
+   * `arrivalTime` once a vehicle comes to rest. While zero sorted *earliest*, a car still
+   * rolling towards the junction therefore outranked one that had been stopped at the line for
+   * a minute — and a cross stream whose headway was shorter than its own approach travel time
+   * always had somebody upstream carrying a zero. Measured on this exact fixture: the waiter
+   * reached the stop line at 6.07s and was still there at 60s, a **53.93s standstill and
+   * counting**, with the cross stream flowing the whole time.
    *
-   * Measured, on the fixture below: the cross route's junction is two cells in (2s of
-   * approach at the fixture's speed limit) and a car joins it every 2s; the waiter reaches the
-   * stop line at 6.07s and is still there at 60s — a 53.93s standstill and counting. Shorten
-   * the approach to one cell, or lengthen the headway to 4s, and it crosses within 1.6s.
-   *
-   * `it.fails` because the assertion states what the model *should* do. When someone gives
-   * candidacy a horizon, or makes "not yet waiting" sort last instead of first, this test
-   * will start passing — and `it.fails` turns that into a failure, so the fix cannot land
-   * without this being turned back into an ordinary `it`. See the task 8 report.
+   * Sorting the sentinel last closes it: the same fixture now clears the junction with a worst
+   * standstill of 1.58s. This test was shipped as `it.fails` for exactly one commit, which is
+   * what turned the fix from a claim into a measurement.
    */
-  it.fails('starves a waiting car against a steady cross stream (known defect)', () => {
+  it('does not starve a waiting car against a steady cross stream', () => {
     const world = createWorld();
     world.routes.set('down', buildRoute(span('down', Array.from({ length: 10 }, (_, gy) =>
       [5, gy, gy === 5 ? X : R] as Cell)))!);
@@ -738,7 +743,12 @@ describe('traffic invariants', () => {
     expect(n, 'cars offered to the cross route').toBeGreaterThan(25);
     expect(world.vehicles.filter(v => v.routeId === 'across').length,
       'the cross stream kept clearing').toBeLessThan(n);
-    // The invariant the rest of this file asserts, stated here too — and currently untrue.
+    // The invariant the rest of this file asserts, stated here too. Measured worst is 1.58s
+    // against a 53.93s standstill before the sentinel was fixed, so the margin is three
+    // orders of magnitude of behaviour rather than a tuned threshold.
     expect(worst, 'longest standstill short of the destination').toBeLessThan(15);
+    // …and it did not merely wait less: it actually got through.
+    expect(world.vehicles.some(v => v.routeId === 'down'), 'the waiter crossed and arrived')
+      .toBe(false);
   });
 });

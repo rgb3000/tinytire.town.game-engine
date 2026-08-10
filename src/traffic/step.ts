@@ -315,16 +315,33 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     }
 
     // Track how long this vehicle has been waiting, for the junction arrival-time key.
-    // Set on the tick it first comes to rest unadmitted; cleared the moment it is let in.
+    // Set on the tick it first comes to rest with a junction ahead it has not been let into.
     //
     // Ages against the junction it is *queueing for*, never against admission in general.
     // A car mid-crossing A while blocked at B is admitted to A every tick, so a flat
     // "admitted anywhere" test would reset its clock forever and starve it at B — the
     // arrival-time key is the whole anti-starvation mechanism, so it must age.
+    //
+    // It is emphatically **not** cleared on admission, and that is the whole of a car's grip
+    // on its place in the queue. `admit` runs from scratch every tick: clearing the stamp the
+    // moment a car is let in dropped it back to the sentinel, which since the sentinel sorts
+    // *last* meant it lost its turn on the very next tick, braked, stopped, and re-stamped
+    // itself as the newest arrival. The result was not a stall — it inched forward a few
+    // millimetres per cycle — so a standstill bound could not see it: measured, a car took
+    // 41s to cross one junction it should clear in 1s, and the crossing-city sweep's
+    // throughput fell from 27-30 arrivals to 17-20 with a 19.93s standstill behind the crawl.
+    // Keeping the stamp makes admission sticky across ticks, which is what a queue *is*.
+    //
+    // The stamp therefore survives until no junction is queued for at all, so it usually
+    // dates from a car's first stop anywhere rather than from its arrival at this particular
+    // junction. That biases priority towards cars that have been in the network longest — a
+    // network-wide FIFO rather than a per-junction one. It cannot starve anybody, which is
+    // the property that matters: stamps never refresh, so the set of cars that can outrank a
+    // given one is fixed at the moment it stops and drains as they pass. Making it exactly
+    // per-junction would need the junction's identity stored alongside the time on the
+    // vehicle; the bias is not worth a wire-visible field until it is shown to matter.
     const queueingFor = approaching.get(v.id);
-    const admittedThere = queueingFor !== undefined
-      && admitted.get(queueingFor)?.has(v.id) === true;
-    if (queueingFor === undefined || admittedThere) {
+    if (queueingFor === undefined) {
       v.arrivalTime = 0;
     } else if (v.arrivalTime === 0 && v.speed <= STOPPED_SPEED) {
       v.arrivalTime = world.time;
