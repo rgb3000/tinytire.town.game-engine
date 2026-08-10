@@ -244,6 +244,14 @@ export interface Vehicle {
    * not waiting. Feeds the arrival-time key in junction admission.
    */
   arrivalTime: number;
+  /**
+   * Arc distance covered in the most recent `step`, in pixels.
+   *
+   * Written every tick and read by the adapter to deduct fuel. Carried on the vehicle
+   * rather than emitted as a per-tick event so that a 200-car world does not allocate 200
+   * event objects every frame — events are reserved for things that actually happen.
+   */
+  distanceThisTick: number;
 }
 
 export interface TrafficWorld {
@@ -253,18 +261,18 @@ export interface TrafficWorld {
   time: number;
 }
 
+/**
+ * Events report things that *happened*, not per-tick state. Continuous quantities like
+ * distance travelled live on the vehicle, so a busy frame allocates nothing.
+ */
 export const TrafficEventKind = {
-  /** Emitted every tick a vehicle moved, carrying the distance for fuel deduction. */
-  Moved: 0,
-  Arrived: 1,
+  Arrived: 0,
 } as const;
 export type TrafficEventKind = (typeof TrafficEventKind)[keyof typeof TrafficEventKind];
 
 export interface TrafficEvent {
   kind: TrafficEventKind;
   vehicleId: string;
-  /** Arc distance travelled this tick. Used by the adapter to deduct fuel. */
-  distanceTravelled: number;
 }
 
 export function createWorld(): TrafficWorld {
@@ -526,17 +534,20 @@ describe('routeCoversCell', () => {
 });
 
 describe('splitAt', () => {
-  it('puts everything in remaining at arc 0', () => {
+  it('puts the whole route in remaining at arc 0', () => {
     const route = buildRoute(straight(4))!;
     const { travelled, remaining } = splitAt(route, 0);
-    expect(travelled).toHaveLength(1);
-    expect(remaining.length).toBe(route.points.length);
+    // travelled is [points[0], cut] where cut === points[0]: a degenerate zero-length
+    // stub. Drawing it is harmless; the invariant that matters is that `remaining`
+    // carries the entire route.
+    expect(travelled).toHaveLength(2);
+    expect(remaining).toHaveLength(route.points.length);
   });
 
-  it('puts everything in travelled at the far end', () => {
+  it('puts the whole route in travelled at the far end', () => {
     const route = buildRoute(straight(4))!;
     const { travelled, remaining } = splitAt(route, route.length);
-    expect(travelled.length).toBe(route.points.length);
+    expect(travelled).toHaveLength(route.points.length);
     expect(remaining).toHaveLength(1);
   });
 
@@ -641,8 +652,6 @@ export function splitAt(route: Route, arc: number): { travelled: PixelPos[]; rem
 
 Run: `npx vitest run src/traffic/routeQueries.test.ts`
 Expected: PASS — 11 tests.
-
-Note: `splitAt(route, 0)` yields `travelled = [points[0], cut]` where `cut === points[0]`; the test expects length 1 only if duplicates collapse. If it fails with length 2, that is the correct behaviour — change the assertion to `toHaveLength(2)` and keep the shared-point and length-preservation tests, which are the ones that matter.
 
 - [ ] **Step 5: Commit**
 
@@ -869,7 +878,7 @@ function straight(id: string, n: number): RouteInput {
 }
 
 function vehicle(id: string, routeId: string, arc: number, speed = 0, mode = VehicleMode.Driving): Vehicle {
-  return { id, routeId, arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0 };
+  return { id, routeId, arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0 };
 }
 
 function worldWith(...vehicles: Vehicle[]): TrafficWorld {
@@ -1500,7 +1509,7 @@ function road(id: string, kinds: SegmentKind[]): RouteInput {
 }
 
 function vehicle(id: string, arc: number, speed = 0, mode = VehicleMode.Driving): Vehicle {
-  return { id, routeId: 'r1', arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0 };
+  return { id, routeId: 'r1', arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0 };
 }
 
 function world(input: RouteInput, ...vehicles: Vehicle[]): TrafficWorld {
@@ -1715,7 +1724,7 @@ function road(id: string, n: number): RouteInput {
 }
 
 function vehicle(id: string, arc: number, speed = 0, mode = VehicleMode.Driving): Vehicle {
-  return { id, routeId: 'r1', arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0 };
+  return { id, routeId: 'r1', arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0 };
 }
 
 function world(n: number, ...vehicles: Vehicle[]): TrafficWorld {
@@ -1784,11 +1793,19 @@ describe('step', () => {
     expect(arrived).toBe(true);
   });
 
-  it('reports distance travelled so the adapter can deduct fuel', () => {
+  it('records distance travelled on the vehicle so the adapter can deduct fuel', () => {
     const w = world(20, vehicle('a', 0, 40));
-    const events = step(w, DT);
-    const ev = events.find(e => e.vehicleId === 'a');
-    expect(ev?.distanceTravelled).toBeGreaterThan(0);
+    step(w, DT);
+    expect(w.vehicles[0].distanceThisTick).toBeGreaterThan(0);
+  });
+
+  it('emits arrival once, not on every tick spent at the end', () => {
+    const w = world(4, vehicle('a', 0, 40));
+    let arrivals = 0;
+    for (let i = 0; i < 900; i++) {
+      arrivals += step(w, DT).filter(e => e.kind === TrafficEventKind.Arrived).length;
+    }
+    expect(arrivals).toBe(1);
   });
 
   it('does not advance a parked car', () => {
@@ -1908,8 +1925,29 @@ function buildJunctionCandidates(world: TrafficWorld): Map<number, JunctionCandi
   return byJunction;
 }
 
-const laneIndex = new LaneIndex();
-const accelerations: number[] = [];
+interface Scratch {
+  laneIndex: LaneIndex;
+  accelerations: number[];
+}
+
+/**
+ * Per-world scratch space, so two worlds stepped in the same process never share state.
+ *
+ * The lane index pools its bucket arrays across rebuilds, so it wants to outlive a single
+ * tick — but making it a module-level singleton would make `step` non-reentrant, and the
+ * determinism tests step two worlds alternately. Keyed by world, it gets the pooling
+ * without the coupling.
+ */
+const scratchByWorld = new WeakMap<TrafficWorld, Scratch>();
+
+function scratchFor(world: TrafficWorld): Scratch {
+  let s = scratchByWorld.get(world);
+  if (!s) {
+    s = { laneIndex: new LaneIndex(), accelerations: [] };
+    scratchByWorld.set(world, s);
+  }
+  return s;
+}
 
 /**
  * Advance the world by `dt`.
@@ -1921,6 +1959,7 @@ const accelerations: number[] = [];
  */
 export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
   const events: TrafficEvent[] = [];
+  const { laneIndex, accelerations } = scratchFor(world);
 
   laneIndex.rebuild(world);
 
@@ -1988,12 +2027,9 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
       v.arrivalTime = world.time;
     }
 
-    const travelled = v.arcDistance - before;
-    if (travelled > 0) {
-      events.push({ kind: TrafficEventKind.Moved, vehicleId: v.id, distanceTravelled: travelled });
-    }
+    v.distanceThisTick = v.arcDistance - before;
     if (v.arcDistance >= route.length - 1e-6 && before < route.length - 1e-6) {
-      events.push({ kind: TrafficEventKind.Arrived, vehicleId: v.id, distanceTravelled: travelled });
+      events.push({ kind: TrafficEventKind.Arrived, vehicleId: v.id });
     }
   }
 
@@ -2103,6 +2139,7 @@ function populate(world: TrafficWorld, routeId: string, count: number, rand: () 
       mode: VehicleMode.Driving,
       lastAcceleration: 0,
       arrivalTime: 0,
+      distanceThisTick: 0,
     };
     world.vehicles.push(v);
   }
@@ -2309,6 +2346,7 @@ git commit -m "test(traffic): assert no-overlap, no-jump, no-stall, determinism 
   - `carDependsOnCell(car: Car, gx: number, gy: number): boolean`
   - `getRouteFor(car: Car): Route | null`
   - `getArc(car: Car): number`
+  - `getDistanceThisTick(car: Car): number`
 
 This is the only file that knows both worlds. `preservePosition` distinguishes a reroute (project the current pixel position onto the new route) from a fresh start (begin at arc 0).
 
@@ -2544,6 +2582,7 @@ export class TrafficAdapter {
       vehicle = {
         id: car.id, routeId: route.id, arcDistance: 0, speed: 0,
         mode: VehicleMode.Driving, lastAcceleration: 0, arrivalTime: 0,
+        distanceThisTick: 0,
       };
       this.vehiclesByCar.set(car.id, vehicle);
       this.world.vehicles.push(vehicle);
@@ -2615,6 +2654,11 @@ export class TrafficAdapter {
 
   getArc(car: Car): number {
     return this.vehiclesByCar.get(car.id)?.arcDistance ?? 0;
+  }
+
+  /** Arc distance this car covered in the most recent `update`, in pixels. */
+  getDistanceThisTick(car: Car): number {
+    return this.vehiclesByCar.get(car.id)?.distanceThisTick ?? 0;
   }
 
   /**
@@ -2789,22 +2833,15 @@ Replace the body of `moveCars` and the movement wiring. `CarSystem` keeps `route
       const events = this.adapter.update(dt);
       this.adapter.writeBack(this.cars);
 
-      for (const event of events) {
-        const car = this.carsById.get(event.vehicleId);
-        if (!car) continue;
+      for (const car of this.cars) {
+        if (car.state === CarState.Idle || car.state === CarState.Stranded) continue;
 
         // Fuel is a game rule, so it is deducted here rather than inside the simulation —
         // and from one distance, so road and highway can no longer disagree about cost.
         if (car.state !== CarState.Refueling) {
-          car.fuel = Math.max(0, car.fuel - event.distanceTravelled / TILE_SIZE);
+          car.fuel = Math.max(0, car.fuel - this.adapter.getDistanceThisTick(car) / TILE_SIZE);
         }
 
-        if (event.kind === TrafficEventKind.Arrived) {
-          this.handleArrival(car, houses, bizMap, houseMap);
-        }
-      }
-
-      for (const car of this.cars) {
         if (car.state === CarState.Refueling) {
           this.refuelingManager.updateRefuelingCar(car, dt, bizMap, houseMap);
         } else if (car.state === CarState.Unloading) {
@@ -2813,6 +2850,14 @@ Replace the body of `moveCars` and the movement wiring. `CarSystem` keeps `route
           car.state = CarState.Stranded;
           this.adapter.setParked(car, true);
         }
+      }
+
+      // Arrivals last: handleArrival may reset a car to idle or install a new route, and
+      // doing that mid-loop would have the fuel pass above read a route the car has left.
+      for (const event of events) {
+        if (event.kind !== TrafficEventKind.Arrived) continue;
+        const car = this.carsById.get(event.vehicleId);
+        if (car) this.handleArrival(car, houses, bizMap, houseMap);
       }
     });
   }
