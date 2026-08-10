@@ -1,9 +1,21 @@
 import { computeSmoothLanePath, sampleAtDistance } from '../utils/roadGeometry';
 import { computeHighwayElevation } from '../highways/highwayGeometry';
-import { LANE_OFFSET } from '../constants';
+import { LANE_OFFSET, TILE_SIZE } from '../constants';
 import type { GridPos, PixelPos } from '../types';
 import { SegmentKind } from './types';
 import type { Route, RouteInput, RouteSample, RouteSegment } from './types';
+
+/**
+ * How far apart consecutive spans' endpoints may be and still count as the same joint.
+ *
+ * Exact coincidence is the wrong test. A grid span's last point carries `LANE_OFFSET`
+ * applied by `computeSmoothLanePath`, whose perpendicular comes from neighbouring grid
+ * cells, while a highway polyline is offset by `offsetRight`, whose perpendicular comes
+ * from the polyline itself. The two agree in direction but not to the pixel, so demanding
+ * equality would reject legitimate routes. A whole tile of separation is not rounding —
+ * it is a bug in whatever assembled the spans.
+ */
+const JOINT_TOLERANCE = TILE_SIZE;
 
 /**
  * Assemble a route from spans of grid cells and highway polylines.
@@ -13,7 +25,10 @@ import type { Route, RouteInput, RouteSample, RouteSegment } from './types';
  * separate integrator. That is what removes the highway-exit splice the old
  * `updateHighwayMovement` performed on `smoothCumDist`.
  *
- * Returns null for input that cannot form a curve (no span with two or more points).
+ * Returns null for input that cannot form a curve: a span with fewer than two points, or
+ * a joint between spans wider than `JOINT_TOLERANCE`. Both would otherwise be absorbed
+ * silently — a dropped span splices its neighbours together, and a wide joint becomes a
+ * phantom straight line carrying the following span's speed limit and elevation profile.
  * Validation lives here, at the boundary, so the simulation carries no defensive branches.
  */
 export function buildRoute(input: RouteInput): Route | null {
@@ -21,6 +36,13 @@ export function buildRoute(input: RouteInput): Route | null {
   const cells: GridPos[] = [];
   const cellDist: number[] = [];
   const segments: RouteSegment[] = [];
+  /**
+   * Whether the previous span recorded cells. When it did, this span's first cell is the
+   * shared joint and is already in `cells`, so recording it again would put a zero-length
+   * step in `cellDist`. Highway spans contribute no cells, so a grid span following one
+   * keeps its first cell.
+   */
+  let prevSpanHadCells = false;
 
   for (const span of input.spans) {
     // Arc distance already accumulated before this span begins.
@@ -29,16 +51,19 @@ export function buildRoute(input: RouteInput): Route | null {
     const skipFirst = points.length > 0;
 
     if (span.kind === 'grid') {
-      if (span.cells.length < 2) continue;
+      if (span.cells.length < 2) return null;
       const smooth = computeSmoothLanePath(span.cells.map(c => c.pos));
+      if (skipFirst && !joins(points[points.length - 1], smooth.points[0])) return null;
       for (let i = skipFirst ? 1 : 0; i < smooth.points.length; i++) {
         points.push({ x: smooth.points[i].x, y: smooth.points[i].y });
       }
-      for (let i = 0; i < span.cells.length; i++) {
+      for (let i = prevSpanHadCells ? 1 : 0; i < span.cells.length; i++) {
         cells.push(span.cells[i].pos);
         cellDist.push(base + smooth.cellDist[i]);
       }
-      // One segment per cell, spanning the midpoints either side of its centre.
+      // One segment per cell, spanning the midpoints either side of its centre. A shared
+      // joint cell keeps a segment from each span: together they cover its full extent,
+      // and each half carries the speed limit the span that owns it declared.
       for (let i = 0; i < span.cells.length; i++) {
         const c = span.cells[i];
         const here = base + smooth.cellDist[i];
@@ -52,9 +77,11 @@ export function buildRoute(input: RouteInput): Route | null {
           pendingDeletion: c.pendingDeletion,
         });
       }
+      prevSpanHadCells = true;
     } else {
-      if (span.polyline.length < 2) continue;
+      if (span.polyline.length < 2) return null;
       const offset = offsetRight(span.polyline, LANE_OFFSET);
+      if (skipFirst && !joins(points[points.length - 1], offset[0])) return null;
       for (let i = skipFirst ? 1 : 0; i < offset.length; i++) {
         points.push(offset[i]);
       }
@@ -66,6 +93,7 @@ export function buildRoute(input: RouteInput): Route | null {
         speedLimit: span.speedLimit,
         pendingDeletion: false,
       });
+      prevSpanHadCells = false;
     }
   }
 
@@ -88,6 +116,13 @@ export function buildRoute(input: RouteInput): Route | null {
     segments,
     length: cumDist[cumDist.length - 1],
   };
+}
+
+/** Whether two span endpoints are close enough to be the same joint. */
+function joins(a: PixelPos, b: PixelPos): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  return Math.sqrt(dx * dx + dy * dy) <= JOINT_TOLERANCE;
 }
 
 function cumulativeLength(points: PixelPos[]): number {

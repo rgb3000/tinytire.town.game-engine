@@ -42,9 +42,15 @@ export interface Route {
   id: string;
   points: PixelPos[];
   cumDist: number[];
-  /** Grid cells traversed, in order. Highway spans contribute none. */
+  /**
+   * Grid cells traversed, in order. Highway spans contribute none, and a cell shared as
+   * the joint between two adjacent grid spans appears once.
+   */
   cells: GridPos[];
-  /** Arc distance of each entry in `cells`. Strictly increasing. */
+  /**
+   * Arc distance of each entry in `cells`. Strictly increasing — consumers may divide by
+   * the gap between neighbours.
+   */
   cellDist: number[];
   segments: RouteSegment[];
   length: number;
