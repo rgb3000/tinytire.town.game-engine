@@ -64,17 +64,27 @@ function nextJunctionCell(route: Route, arc: number): number {
  * second is also why a vehicle inside a junction must stay in `admitted` until it has
  * left; see `JunctionCandidate.inside`.
  *
- * `admitted` maps a vehicle id to the `junctionKey` of the one junction it may cross —
- * never to a bare "is admitted" flag. A car inside junction A is a candidate for A while
- * the junction ahead of it is already B, so membership alone would wave it out of A and
- * straight into B's cross traffic without yielding. Adjacent junctions are ordinary in a
- * grid city, since a cell is an intersection by connection count.
+ * `admitted` maps a `junctionKey` to the ids admitted to *that* junction — never a bare
+ * "is admitted" flag, and never one junction per vehicle. Both levels carry weight:
+ *
+ * - Keyed by junction, because a car inside junction A is a candidate for A while the
+ *   junction ahead of it is already B. A flag alone would wave it out of A straight into
+ *   B's cross traffic without yielding, and adjacent junction cells are ordinary in a grid
+ *   city since a cell is an intersection by connection count.
+ * - A **set** per junction, and one vehicle may legitimately appear under two keys at
+ *   once: it holds A reserved while it physically occupies the box and is at the same time
+ *   an entrant for B. That is the fact a vehicle-keyed map could not express, and without
+ *   it a car mid-crossing can never earn admission to B, halts short of B's stop line
+ *   while still inside A, and stalls there permanently, blocking A's cross traffic.
+ *
+ * It is also the shape `admit()` already returns, so the stepper stores each junction's
+ * result directly.
  */
 export function nearestConstraint(
   world: TrafficWorld,
   vehicle: Vehicle,
   index: LaneIndex,
-  admitted: Map<string, number>,
+  admitted: Map<number, Set<string>>,
 ): Constraint {
   const route = world.routes.get(vehicle.routeId);
   // No route is no road: hold position rather than accelerate into nothing.
@@ -95,7 +105,8 @@ export function nearestConstraint(
   const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
   if (cellIndex >= 0) {
     const cell = route.cells[cellIndex];
-    if (admitted.get(vehicle.id) !== junctionKey(cell.gx, cell.gy)) {
+    const admittedHere = admitted.get(junctionKey(cell.gx, cell.gy))?.has(vehicle.id) === true;
+    if (!admittedHere) {
       const stopArc = junctionEntryArc(route, cellIndex);
       if (stopArc < best.arc) best = { arc: stopArc, speed: 0 };
     }

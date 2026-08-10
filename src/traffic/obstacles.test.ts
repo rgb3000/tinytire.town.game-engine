@@ -98,14 +98,21 @@ function indexed(w: TrafficWorld): LaneIndex {
 }
 
 /**
- * Admission to one specific junction — the cell at `cellIndex` of `route`.
+ * Admission to specific junctions — the cells at `cellIndices` of `route`.
  *
- * Admission carries the junction's identity, not a bare flag, so a car cleared to cross
- * one junction is still stopped by the next.
+ * Keyed by junction rather than by vehicle, so admission carries the junction's identity
+ * and the same vehicle can appear under two keys at once: the junction it is physically
+ * inside, and the one it is about to enter.
  */
-function admittedTo(route: Route, cellIndex: number, ...ids: string[]): Map<string, number> {
-  const cell = route.cells[cellIndex];
-  return new Map(ids.map(id => [id, junctionKey(cell.gx, cell.gy)]));
+function admittedTo(
+  route: Route, cellIndices: number[], ...ids: string[]
+): Map<number, Set<string>> {
+  const out = new Map<number, Set<string>>();
+  for (const i of cellIndices) {
+    const cell = route.cells[i];
+    out.set(junctionKey(cell.gx, cell.gy), new Set(ids));
+  }
+  return out;
 }
 
 /** Arc of the centre of the next junction cell strictly ahead, or null. */
@@ -127,7 +134,7 @@ function junctionCentreAhead(route: Route, arc: number): number | null {
  * neither aware of the other, and neither able to name *what* it is slowing down for.
  */
 function minOfTwoMultipliers(
-  w: TrafficWorld, v: Vehicle, index: LaneIndex, admitted: Map<string, number>,
+  w: TrafficWorld, v: Vehicle, index: LaneIndex, admitted: Map<number, Set<string>>,
 ): number {
   const route = w.routes.get(v.routeId)!;
   const limit = speedLimitAt(route, v.arcDistance);
@@ -139,7 +146,8 @@ function minOfTwoMultipliers(
       : (gap - CAR_MIN_GAP) / (CAR_COMFORT_GAP - CAR_MIN_GAP);
 
   let intersectionMult = 1;
-  if (admitted.get(v.id) === undefined) {
+  // The old rule had no junction identity: admitted anywhere was admitted everywhere.
+  if (![...admitted.values()].some(set => set.has(v.id))) {
     const centre = junctionCentreAhead(route, v.arcDistance);
     if (centre !== null) {
       const d = centre - v.arcDistance;
@@ -249,7 +257,7 @@ describe('nearestConstraint', () => {
     const route = w.routes.get('r1')!;
     const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
 
-    const c = nearestConstraint(w, w.vehicles[0], indexed(w), admittedTo(route, 2, 'a'));
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), admittedTo(route, [2], 'a'));
     expect(c.arc).toBeCloseTo(route.length, 5);
     expect(c.arc).toBeGreaterThan(boundary);
   });
@@ -277,14 +285,38 @@ describe('nearestConstraint', () => {
     const secondBoundary = (TILE_SIZE + 2 * TILE_SIZE) / 2;
     expect(secondBoundary).toBeGreaterThan(TILE_SIZE);
 
-    const inFirst = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, 1, 'a'));
+    const inFirst = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, [1], 'a'));
     expect(inFirst.arc).toBeCloseTo(secondBoundary, 5);
     expect(inFirst.speed).toBe(0);
 
     // Admitted to the second as well, it may cross. Same geometry, so the difference is
     // the identity of the admission and nothing else.
-    const inSecond = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, 2, 'a'));
+    const inSecond = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, [2], 'a'));
     expect(inSecond.arc).toBeCloseTo(route.length, 5);
+  });
+
+  /**
+   * How a car mid-crossing gets out. It is offered to two junctions at once — an occupant
+   * of the one it is in, an entrant to the one ahead — so admission is keyed by junction
+   * with a set of ids under each, not one junction per vehicle. Held to a single junction
+   * it could never be admitted to the next, would stop short of that line while still
+   * inside the first, and would sit there blocking the cross traffic of a junction it had
+   * already been let into.
+   */
+  it('proceeds when admitted to both the junction it is in and the one ahead', () => {
+    const w = world(road('r1', [R, X, X, R]), vehicle('a', TILE_SIZE, 20));
+    const route = w.routes.get('r1')!;
+    const both = admittedTo(route, [1, 2], 'a');
+
+    // Premise: one vehicle under two distinct junction keys at once — the state the
+    // previous vehicle-keyed shape could not represent at all.
+    expect(both.size).toBe(2);
+    expect(both.get(junctionKey(1, 0))!.has('a')).toBe(true);
+    expect(both.get(junctionKey(2, 0))!.has('a')).toBe(true);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), both);
+    expect(c.arc).toBeCloseTo(route.length, 5);
+    expect(c.speed).toBe(0);
   });
 
   it('does not constrain an admitted car already past its own stop line', () => {
@@ -298,7 +330,7 @@ describe('nearestConstraint', () => {
     expect(route.cellDist[2]).toBeGreaterThan(inside);
 
     // Braking for a junction it has permission to cross would stop it in the box.
-    const c = nearestConstraint(w, w.vehicles[0], indexed(w), admittedTo(route, 2, 'a'));
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), admittedTo(route, [2], 'a'));
     expect(c.arc).toBeCloseTo(route.length, 5);
   });
 
@@ -353,7 +385,7 @@ describe('nearestConstraint', () => {
 
     // Admit it through, and the same geometry hands back that leader — so the junction won
     // on distance, not by default.
-    const admitted = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, 2, 'a'));
+    const admitted = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, [2], 'a'));
     expect(admitted.arc).toBeCloseTo(start + gap, 5);
     expect(admitted.speed).toBeCloseTo(10, 5);
   });
@@ -483,7 +515,7 @@ describe('nearestConstraint', () => {
 
     const w = world(road('r1', [R, R, X, R]), vehicle('a', between, 20));
     const index = indexed(w);
-    const notAdmitted = new Map<string, number>();
+    const notAdmitted = new Map<number, Set<string>>();
 
     // The old rule still lets this car drive: it is past the boundary but short of the
     // centre, so its multiplier has not reached zero.
