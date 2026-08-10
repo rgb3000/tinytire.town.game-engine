@@ -211,6 +211,12 @@ export interface Route {
   cells: GridPos[];
   /** Arc distance of each entry in `cells`. Strictly increasing. */
   cellDist: number[];
+  /**
+   * Speed/kind metadata. **Not index-aligned with `cells`**: a highway span contributes
+   * one segment and no cells, and adjacent grid spans share a joint cell that keeps a
+   * half-segment from each side. Always look a segment up by arc (`segmentAt`), never by
+   * cell index.
+   */
   segments: RouteSegment[];
   length: number;
 }
@@ -1611,12 +1617,19 @@ export function junctionEntryArc(route: Route, cellIndex: number): number {
   return (route.cellDist[cellIndex - 1] + route.cellDist[cellIndex]) / 2;
 }
 
-/** Index of the next junction cell strictly ahead of `arc`, or -1. */
+/**
+ * Index of the next junction cell strictly ahead of `arc`, or -1.
+ *
+ * Looks the segment up **by arc**, never by cell index. `segments` and `cells` are not
+ * index-aligned: a highway span contributes one segment and no cells, and adjacent grid
+ * spans share a joint cell that keeps a half-segment from each side. Indexing one array
+ * by the other silently reads the wrong segment on any route containing a highway.
+ */
 function nextJunctionCell(route: Route, arc: number): number {
   for (let i = 0; i < route.cells.length; i++) {
     if (route.cellDist[i] <= arc) continue;
-    const seg = route.segments[i];
-    if (seg !== undefined && seg.kind === SegmentKind.Intersection) return i;
+    const seg = segmentAt(route, route.cellDist[i]);
+    if (seg !== null && seg.kind === SegmentKind.Intersection) return i;
   }
   return -1;
 }
@@ -1848,7 +1861,7 @@ import { LaneIndex, edgeIndexAt } from './lanes';
 import { admit } from './junction';
 import type { JunctionCandidate } from './junction';
 import { nearestConstraint, isInsideJunction } from './obstacles';
-import { speedLimitAt } from './route';
+import { segmentAt, speedLimitAt } from './route';
 import { DEFAULT_IDM, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
 import { SegmentKind, TrafficEventKind, VehicleMode } from './types';
 import type { Route, TrafficEvent, TrafficWorld, Vehicle } from './types';
@@ -1857,11 +1870,16 @@ function tileKey(gx: number, gy: number): number {
   return gx | (gy << 8);
 }
 
-/** The junction cell a vehicle is approaching or occupying, or -1. */
+/**
+ * The junction cell a vehicle is approaching or occupying, or -1.
+ *
+ * Segments are looked up by arc, not by cell index — see the note on `nextJunctionCell`
+ * in `obstacles.ts`. The two arrays are not index-aligned.
+ */
 function relevantJunctionCell(route: Route, arc: number): number {
   for (let i = 0; i < route.cells.length; i++) {
-    const seg = route.segments[i];
-    if (seg === undefined || seg.kind !== SegmentKind.Intersection) continue;
+    const seg = segmentAt(route, route.cellDist[i]);
+    if (seg === null || seg.kind !== SegmentKind.Intersection) continue;
     if (arc <= seg.endArc) return i;
   }
   return -1;
