@@ -1448,7 +1448,13 @@ function yieldRank(c: JunctionCandidate, all: JunctionCandidate[]): number {
   let rank = 0;
   for (const other of all) {
     if (other.vehicleId === c.vehicleId) continue;
-    if (Math.abs(other.arrivalTime - c.arrivalTime) > SIMULTANEOUS_EPS) continue;
+    // Same sentinel as the comparator: 0 means "still rolling", not "arrived at time
+    // zero". Comparing it raw made every rolling car simultaneous with any waiter stamped
+    // inside the first EPS of world time, and yieldRank sorts BEFORE arrival time — so
+    // that waiter could be outranked forever. Measured at 60s and still standing.
+    const ca = c.arrivalTime === 0 ? Infinity : c.arrivalTime;
+    const oa = other.arrivalTime === 0 ? Infinity : other.arrivalTime;
+    if (Math.abs(oa - ca) > SIMULTANEOUS_EPS) continue;
     if (!maneuversConflict(c.entry, c.exit, other.entry, other.exit)) continue;
     if (other.entry === YIELD_TO_DIRECTION[c.entry]) rank++;
   }
