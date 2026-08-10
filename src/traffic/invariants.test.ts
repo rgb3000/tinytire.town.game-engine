@@ -857,7 +857,7 @@ describe('traffic invariants', () => {
    * cars on it. Measured before the fix — starved for the whole 60s run, resting at arc 166.3;
    * five of the sixteen cells of the approach-length x headway sweep starved the same way.
    */
-  it('does not starve a car stamped in the first tick of a cold world', () => {
+  it('does not starve a car stamped in the opening moments of a cold world', () => {
     const world = createWorld();
     expect(world.time, 'a world starts at t=0, which is the whole point here').toBe(0);
 
@@ -866,8 +866,14 @@ describe('traffic invariants', () => {
     world.routes.set('across', buildRoute(span('across', Array.from({ length: 8 }, (_, i) =>
       [3 + i, 5, i === 2 ? X : R] as Cell)))!);
 
-    // At rest, so it is stamped on the very first tick — `approachingJunctionCell` has no
-    // horizon, so a stationary car anywhere upstream of a junction is queued for it.
+    // At rest, so it is stamped as early as a vehicle can be — `approachingJunctionCell` has
+    // no horizon, so a stationary car anywhere upstream of a junction is queued for it.
+    //
+    // "As early as a vehicle can be" is the **second** tick, not the first: `world.time` is
+    // advanced at the end of `step`, so the stamp taken on tick one is `0` — the sentinel
+    // value itself — and is therefore indistinguishable from "not waiting". The next tick sees
+    // `arrivalTime === 0` still true and stamps 0.0167 for real. Self-healing, one tick lost,
+    // and it is 0.0167 that this test is about.
     world.vehicles.push(car('W', 'down', 0, 0));
 
     let stall = 0;
@@ -898,7 +904,7 @@ describe('traffic invariants', () => {
     // the waiter's stamp really does land inside the simultaneity window of zero. Without
     // this, a future change to spawn speeds or to `STOPPED_SPEED` could quietly turn it into
     // a duplicate of the test above.
-    expect(firstStamp, 'stamped in the opening tick').toBeGreaterThan(0);
+    expect(firstStamp, 'stamped on the first tick that can hold a stamp').toBeGreaterThan(0);
     expect(firstStamp, 'and within SIMULTANEOUS_EPS of the sentinel')
       .toBeLessThanOrEqual(SIMULTANEOUS_EPS);
     expect(n, 'cars offered to the cross route').toBeGreaterThan(25);

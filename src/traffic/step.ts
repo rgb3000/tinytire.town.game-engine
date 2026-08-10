@@ -351,16 +351,21 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     // in (0, T) — is fixed at T, and only leaves it: a member is removed when it crosses, and
     // no vehicle can join, because every later stamp is greater than T. Membership never grows.
     //
-    // Fresh arrivals are not *entirely* excluded, and the earlier version of this note said
+    // Fresh arrivals are not *entirely* excluded, and an earlier version of this note said
     // they were. A car stamping in (T, T+EPS] **does** enter T's yield rank, which is the key
-    // that sorts first. What bounds it is that the window closes: `world.time` passes T+EPS
-    // and stays past it, so T's rank is 0 from then on and only the finite set above can
-    // precede it. A dense stream delays a waiter by at most that window, not indefinitely.
+    // that sorts first. What bounds it is that the window closes for *joining*: once
+    // `world.time` is past T+EPS no later stamp can be simultaneous with T, so no vehicle can
+    // join T's rank after that, and the finite set already in it drains as its members cross.
+    // The passage of time alone changes nothing — `yieldRank` takes no clock and reads only
+    // stamps, so a car that stamped at T+0.04 before the window closed stays in T's rank until
+    // it crosses or re-stamps. The bound is therefore the window plus the drain of a set that
+    // cannot grow, which is finite; it is not that the rank returns to zero on a timer.
     //
-    // Note also that the sentinel is **comparator-only** in the sense that matters: it is a
-    // property of `arrivalKey`, and every consumer of `arrivalTime` in `junction.ts` has to go
-    // through it. `yieldRank` comparing raw times while the comparator mapped them is exactly
-    // how a whole class of starvation stayed invisible — see `arrivalKey` there.
+    // The sentinel itself is a property of `arrivalKey` in `junction.ts`, and by convention
+    // every consumer of `arrivalTime` there goes through it. Convention is all it is —
+    // `JunctionCandidate.arrivalTime` is a plain number, so a new consumer comparing raw times
+    // would typecheck happily. `yieldRank` doing exactly that while the comparator mapped them
+    // is how a whole class of starvation stayed invisible; see the note on `arrivalKey`.
     const queueingFor = approaching.get(v.id);
     if (queueingFor === undefined) {
       v.arrivalTime = 0;

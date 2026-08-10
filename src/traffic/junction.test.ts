@@ -298,6 +298,32 @@ describe('admit', () => {
     expect(got).toEqual(new Set(['queued']));
   });
 
+  it('makes a rolling car yield to one queued within the simultaneity window', () => {
+    // The same rule as above, but with the stamp *inside* `SIMULTANEOUS_EPS` of the sentinel —
+    // and that difference is the whole test. The 30s stamp above is far outside the window, so
+    // `yieldRank` skips the pair and only the comparator ever sees the sentinel. Here the two
+    // are simultaneous by raw arithmetic (|0 - 0.03| <= 0.05), so the give-way rule engages and
+    // it is `yieldRank` that has to map the sentinel. It did not, for three revisions: the rank
+    // sorts *before* the arrival time, so a car stamped within 50ms of world creation was
+    // outranked by every rolling car for ever. A world built at t=0 with cars already at rest
+    // is exactly that, and it starved five of sixteen cells of the approach x headway sweep.
+    //
+    // **The entry directions are load-bearing, not decoration.** `YIELD_TO_DIRECTION[Up]` is
+    // `Left`, so a roller arriving from the left is one the queued car must give way to, and
+    // the rank flips. Run the same probe with `Direction.Right` for the roller and it passes
+    // even with the sentinel missing from `yieldRank` — the queued car outranks it anyway, and
+    // the bug walks straight through.
+    expect(YIELD_TO_DIRECTION[Direction.Up]).toBe(Direction.Left);
+    expect(maneuversConflict(Direction.Left, Direction.Left, Direction.Up, Direction.Up))
+      .toBe(true);
+
+    const near = admit([
+      candidate('rolling', Direction.Left, Direction.Left, { arrivalTime: 0 }),
+      candidate('queued', Direction.Up, Direction.Up, { arrivalTime: 0.03 }),
+    ]);
+    expect(near).toEqual(new Set(['queued']));
+  });
+
   it('still admits a lone rolling car immediately, with nobody queued against it', () => {
     // The other half of the sentinel: yielding to a queue must not become stopping at every
     // junction. An uncontested car loses this key to nobody, so free flow is untouched.
