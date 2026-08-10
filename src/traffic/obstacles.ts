@@ -11,6 +11,17 @@ export interface Constraint {
 }
 
 /**
+ * Identity of a junction, packed from its cell coordinates the same way `laneKey` packs
+ * its own. Admission is keyed by it rather than by vehicle id alone: `_isIntersection` is
+ * a connection count, so two junction cells can sit side by side, and a car cleared to
+ * cross one must still stop at the next. One definition, so admission and the stop line
+ * cannot drift apart.
+ */
+export function junctionKey(gx: number, gy: number): number {
+  return gx | (gy << 8);
+}
+
+/**
  * Where a junction cell begins, in arc distance: midway between the previous cell centre
  * and the junction's own centre. Cars stop here, not at the centre.
  */
@@ -52,12 +63,18 @@ function nextJunctionCell(route: Route, arc: number): number {
  * hardest braking, and `idmAcceleration` floors the gap rather than dividing by zero. The
  * second is also why a vehicle inside a junction must stay in `admitted` until it has
  * left; see `JunctionCandidate.inside`.
+ *
+ * `admitted` maps a vehicle id to the `junctionKey` of the one junction it may cross —
+ * never to a bare "is admitted" flag. A car inside junction A is a candidate for A while
+ * the junction ahead of it is already B, so membership alone would wave it out of A and
+ * straight into B's cross traffic without yielding. Adjacent junctions are ordinary in a
+ * grid city, since a cell is an intersection by connection count.
  */
 export function nearestConstraint(
   world: TrafficWorld,
   vehicle: Vehicle,
   index: LaneIndex,
-  admitted: Set<string>,
+  admitted: Map<string, number>,
 ): Constraint {
   const route = world.routes.get(vehicle.routeId);
   // No route is no road: hold position rather than accelerate into nothing.
@@ -74,9 +91,11 @@ export function nearestConstraint(
   }
 
   // A junction the vehicle has not been admitted to becomes a stop line at its boundary.
-  if (!admitted.has(vehicle.id)) {
-    const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
-    if (cellIndex >= 0) {
+  // Admission to some *other* junction is not admission to this one.
+  const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
+  if (cellIndex >= 0) {
+    const cell = route.cells[cellIndex];
+    if (admitted.get(vehicle.id) !== junctionKey(cell.gx, cell.gy)) {
       const stopArc = junctionEntryArc(route, cellIndex);
       if (stopArc < best.arc) best = { arc: stopArc, speed: 0 };
     }
