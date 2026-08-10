@@ -205,6 +205,8 @@ interface SweepResult {
   interactions: number;
   /** Vehicle-ticks spent stopped somewhere other than the destination: somebody yielded. */
   yields: number;
+  /** Total distance covered by everybody, over total vehicle-time: px/s. */
+  meanSpeed: number;
   violations: string[];
 }
 
@@ -229,7 +231,7 @@ function sweep(scenario: Scenario, opts: SweepOptions): SweepResult {
     vehicleTicks: 0, arrivals: 0, spawned: 0,
     minSameRouteGap: Infinity, minWorldGap: Infinity,
     maxTickAdvance: 0, maxSpeedChange: 0, maxSpeed: 0, maxStall: 0, worstStall: 'nobody',
-    interactions: 0, yields: 0, violations: [],
+    interactions: 0, yields: 0, meanSpeed: 0, violations: [],
   };
   const note = (msg: string): void => {
     if (result.violations.length < 8) result.violations.push(msg);
@@ -237,6 +239,7 @@ function sweep(scenario: Scenario, opts: SweepOptions): SweepResult {
 
   const stalledFor = new Map<string, number>();
   let spawnCounter = 0;
+  let distanceCovered = 0;
 
   for (let tick = 0; tick < opts.ticks; tick++) {
     const before = new Map(world.vehicles.map(v => [v.id, { arc: v.arcDistance, speed: v.speed }]));
@@ -250,6 +253,7 @@ function sweep(scenario: Scenario, opts: SweepOptions): SweepResult {
       const where = `${scenario.name} tick ${tick} ${v.id}`;
 
       result.vehicleTicks++;
+      distanceCovered += moved;
       result.maxSpeed = Math.max(result.maxSpeed, v.speed);
       result.maxTickAdvance = Math.max(result.maxTickAdvance, moved);
       result.maxSpeedChange = Math.max(result.maxSpeedChange, Math.abs(v.speed - prev.speed));
@@ -352,6 +356,7 @@ function sweep(scenario: Scenario, opts: SweepOptions): SweepResult {
     }
   }
 
+  result.meanSpeed = result.vehicleTicks > 0 ? distanceCovered / (result.vehicleTicks * DT) : 0;
   return result;
 }
 
@@ -364,6 +369,32 @@ function expectClean(result: SweepResult, name: string): void {
     .toBeLessThanOrEqual(SPEED_LIMIT * DT + 1e-9);
   expect(result.maxSpeedChange, `${name}: largest speed change in one tick`)
     .toBeLessThanOrEqual(MAX_SPEED_CHANGE + 1e-9);
+}
+
+/**
+ * Free flow, as an assertion rather than a measurement.
+ *
+ * A convoy on a corridor whose junctions carry **no cross traffic at all** should barely
+ * touch its brakes: every junction is uncontested, so admission is immediate and the only
+ * thing shaping the traffic is car-following. This is the case the lone-car test cannot
+ * cover — a single vehicle has nobody in its exit cell, so it is bit-identically unaffected
+ * by anything the junction model does with occupancy.
+ *
+ * It exists to catch a throughput regression wearing a correctness disguise. Making
+ * `exitHasRoom` treat a *moving* car in the exit cell as blocking is safe by every measure
+ * this file otherwise asserts — no overlap, no stall, no jump — and takes stopped
+ * vehicle-ticks on a plain corridor from 69 to 3999, a 58× increase, which is literally
+ * every car stopping at every junction. Nothing else here can see it: the arrivals premise
+ * still passes at 17 of 20, and the sweep's other bounds are all one-sided.
+ */
+function expectFreeFlowing(result: SweepResult, name: string): void {
+  // A hard bound on the mean, and a bound on how much of the run was spent stationary. Both
+  // are stated with an order of magnitude of headroom over what the model actually does —
+  // 38.2-38.4px/s of a 40px/s limit, and 51-76 stopped vehicle-ticks of ~70 000 — because
+  // they are here to catch a collapse, not to pin the tuning.
+  expect(result.meanSpeed, `${name}: mean speed`).toBeGreaterThan(SPEED_LIMIT * 0.9);
+  expect(result.yields / result.vehicleTicks, `${name}: fraction of vehicle-ticks stationary`)
+    .toBeLessThan(0.01);
 }
 
 /**
@@ -391,13 +422,12 @@ function expectBusy(result: SweepResult, name: string, minArrivals: number): voi
 // --- the scenarios under sweep ------------------------------------------------------------
 
 /**
- * Two seeds, not four. The four originally swept cost ~400ms of every CI run and differed
- * only in initial spacing and speeds of the same corridor; vertical, L-shaped and
- * nine-junction fixtures cover the shapes that actually differ. What is lost is two more
- * samples of one shape — worth having if a future failure ever looks seed-dependent, and
- * cheap to restore, since the sweep is parameterised by seed.
+ * Four seeds. Two were tried, on the reasoning that they differ only in initial spacing and
+ * speeds of one shape — but the saving was measured at approximately nothing: vitest runs
+ * files in parallel and this one is not the critical path, so wall clock was 1.82-2.03s with
+ * the extra seeds and 1.83-2.03s without. Two samples of coverage for no time is a bad trade.
  */
-const CORRIDOR_SEEDS = [1, 42];
+const CORRIDOR_SEEDS = [1, 7, 42, 1337];
 
 describe('traffic invariants', () => {
   it('builds the fixtures it claims to', () => {
@@ -466,6 +496,9 @@ describe('traffic invariants', () => {
     expectClean(result, scenario.name);
     expectBusy(result, scenario.name, 15);
     expectNoStall(result, scenario.name);
+    // The corridor's junctions carry no cross traffic, so this convoy should never be
+    // stopped by one. See `expectFreeFlowing`.
+    expectFreeFlowing(result, scenario.name);
   });
 
   it.each([2, 8])('holds on a loaded vertical corridor (seed %i)', (seed) => {
@@ -476,6 +509,7 @@ describe('traffic invariants', () => {
     expectClean(result, scenario.name);
     expectBusy(result, scenario.name, 8);
     expectNoStall(result, scenario.name);
+    expectFreeFlowing(result, scenario.name);
   });
 
   it.each([3, 9])('holds on a loaded L-shaped route (seed %i)', (seed) => {

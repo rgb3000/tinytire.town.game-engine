@@ -332,14 +332,25 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     // throughput fell from 27-30 arrivals to 17-20 with a 19.93s standstill behind the crawl.
     // Keeping the stamp makes admission sticky across ticks, which is what a queue *is*.
     //
-    // The stamp therefore survives until no junction is queued for at all, so it usually
-    // dates from a car's first stop anywhere rather than from its arrival at this particular
-    // junction. That biases priority towards cars that have been in the network longest — a
-    // network-wide FIFO rather than a per-junction one. It cannot starve anybody, which is
-    // the property that matters: stamps never refresh, so the set of cars that can outrank a
-    // given one is fixed at the moment it stops and drains as they pass. Making it exactly
-    // per-junction would need the junction's identity stored alongside the time on the
-    // vehicle; the bias is not worth a wire-visible field until it is shown to matter.
+    // The stamp is cleared on `queueingFor === undefined`, and that covers **entering the
+    // junction** as well as running out of junctions: `approachingJunctionCell` looks strictly
+    // ahead by cell centre, so from the moment a car crosses the near boundary until it passes
+    // the centre, the cell ahead *is* the cell it is inside, `approaching` is not set, and the
+    // stamp goes. Traced on a two-junction route: stamped t=2.350 at arc 45.9, cleared t=3.183
+    // at arc 60.6 — the boundary — and stamped afresh at t=8.267 approaching the next one.
+    //
+    // So a stamp dates from a car's last stop since its last junction entry, not from its
+    // first stop anywhere. Near enough to per-junction FIFO; the residue is that a car which
+    // stopped *between* junctions, behind a queue, carries that earlier time into the next
+    // junction and can pre-empt cars already waiting there.
+    //
+    // No vehicle can be starved by this, and the argument is **monotonicity, not permanence**.
+    // `world.time` only increases, so any re-stamp is strictly later than the one it replaced,
+    // and a car still rolling carries the sentinel, which sorts last. For a car holding stamp
+    // T, the set of vehicles that can outrank it — those holding a stamp in (0, T) — is fixed
+    // at T and can only shrink as they are admitted. A stream of fresh arrivals, however
+    // dense, can therefore never raise its rank; `SIMULTANEOUS_EPS` keeps them out of its
+    // yield rank too, since they are not simultaneous with it.
     const queueingFor = approaching.get(v.id);
     if (queueingFor === undefined) {
       v.arrivalTime = 0;

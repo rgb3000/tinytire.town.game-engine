@@ -165,8 +165,18 @@ function codeOf(file: string): string {
 
 // --- the rules --------------------------------------------------------------------------
 
-/** Bare module specifiers no file in the closure may import. */
-const FORBIDDEN_PACKAGES = ['three', 'three/webgpu', 'tone'];
+/**
+ * Bare module specifiers no file in the closure may import, matched as **prefixes**: the
+ * package itself or any subpath of it. Exact matching against an enumerated list let
+ * `three/examples/jsm/utils/BufferGeometryUtils.js` and `tone/build/esm/index` straight
+ * through — and enumerating `three/webgpu` was the tell that subpaths were known about and
+ * being chased one at a time.
+ */
+const FORBIDDEN_PACKAGES = ['three', 'tone'];
+
+function isForbiddenPackage(spec: string): boolean {
+  return FORBIDDEN_PACKAGES.some(p => spec === p || spec.startsWith(`${p}/`));
+}
 
 /** Relative import targets no file in the closure may reach. */
 const FORBIDDEN_PATHS: { test: (p: string) => boolean; why: string }[] = [
@@ -270,9 +280,16 @@ describe('src/traffic purity', () => {
 
   it('never imports a rendering or audio package', () => {
     const offenders = closure.external
-      .filter(e => FORBIDDEN_PACKAGES.includes(e.spec))
+      .filter(e => isForbiddenPackage(e.spec))
       .map(e => `${rel(e.file)} imports ${e.spec}`);
     expect(offenders).toEqual([]);
+    // The matcher itself, in both directions — an exact-match rule passed all three subpaths
+    // below, and a rule loose enough to catch them must not swallow unrelated packages.
+    expect(['three', 'three/webgpu', 'three/examples/jsm/utils/BufferGeometryUtils.js',
+      'tone', 'tone/build/esm/index'].filter(isForbiddenPackage))
+      .toHaveLength(5);
+    expect(['threejs-helper', 'tonegen', 'zod', 'node:fs', '../three'].filter(isForbiddenPackage))
+      .toEqual([]);
   });
 
   it('never reaches the Grid, the renderer, the systems or the entities', () => {
