@@ -99,6 +99,39 @@ export function maneuversConflict(
 }
 
 /**
+ * `arrivalTime` sort key. Zero is a sentinel meaning "has not begun waiting" — the stepper
+ * only stamps a vehicle once it comes to rest — so it must order *after* every real time,
+ * not before it.
+ *
+ * This lives in one function because it was once applied in one place. The comparator below
+ * mapped the sentinel and `simultaneous` did not, so a car still rolling counted as having
+ * arrived at time zero on the yield rank — the key that sorts *first*. Any vehicle whose own
+ * stamp fell within `SIMULTANEOUS_EPS` of zero was therefore simultaneous with every rolling
+ * car for ever, and could be outranked by each of them in turn. That is not hypothetical: a
+ * world created at t=0 with a car already at rest stamps it at t=0.017, and on the same
+ * fixture that proved the first starvation it stood at the line for the whole 60s run, while
+ * the identical world with its clock warmed to t=100 crossed in 6.12s.
+ */
+function arrivalKey(arrivalTime: number): number {
+  return arrivalTime === 0 ? Infinity : arrivalTime;
+}
+
+/**
+ * Whether two candidates count as having arrived together, for *rechts vor links*.
+ *
+ * Two cars that have both yet to stop are simultaneous with each other — they are converging
+ * on the junction together and the give-way rule is exactly what decides between them. A car
+ * that has stopped and one that has not are never simultaneous, however close the stamp is to
+ * zero: `Infinity` is not within `SIMULTANEOUS_EPS` of anything finite.
+ */
+function simultaneous(a: number, b: number): boolean {
+  const ka = arrivalKey(a);
+  const kb = arrivalKey(b);
+  if (ka === kb) return true;
+  return Math.abs(ka - kb) <= SIMULTANEOUS_EPS;
+}
+
+/**
  * How many simultaneous, conflicting candidates have priority over this one under
  * *rechts vor links*.
  *
@@ -106,12 +139,16 @@ export function maneuversConflict(
  * is cyclic at a four-way, but counting how many cars each driver must give way to is a
  * plain number, and numbers sort. Two cars reproduce the rule exactly; four cars in a
  * cycle all score 1, and the id tiebreak lets exactly one through.
+ *
+ * Ranks are compared on `arrivalKey`, not on the raw time, and this key sorts **before** the
+ * arrival time in `admit` — so getting the sentinel wrong here outranks getting it right
+ * there. See `arrivalKey`.
  */
 function yieldRank(c: JunctionCandidate, all: JunctionCandidate[]): number {
   let rank = 0;
   for (const other of all) {
     if (other.vehicleId === c.vehicleId) continue;
-    if (Math.abs(other.arrivalTime - c.arrivalTime) > SIMULTANEOUS_EPS) continue;
+    if (!simultaneous(other.arrivalTime, c.arrivalTime)) continue;
     if (!maneuversConflict(c.entry, c.exit, other.entry, other.exit)) continue;
     if (other.entry === YIELD_TO_DIRECTION[c.entry]) rank++;
   }
@@ -147,7 +184,8 @@ export function admit(candidates: JunctionCandidate[]): Set<string> {
     const ry = ranks.get(y.vehicleId)!;
     if (rx !== ry) return rx - ry;
     // Zero is the sentinel for "has not begun waiting", not a timestamp — so it must sort
-    // *last* on this key, not first.
+    // *last* on this key, not first. Via `arrivalKey`, which `yieldRank` shares: the two
+    // disagreeing about the sentinel is what made a whole class of starvation invisible.
     //
     // Reading it as an ordinary arrival time meant a car still rolling towards the junction
     // outranked one that had been stopped at the line for a minute, since the stepper only
@@ -161,8 +199,8 @@ export function admit(candidates: JunctionCandidate[]): Set<string> {
     // too: an uncontested rolling car is admitted immediately, because it can only lose this
     // key to a car that is actually queued at the line. A contested one now yields to that
     // queue, which is what a junction is for.
-    const ax = x.arrivalTime === 0 ? Infinity : x.arrivalTime;
-    const ay = y.arrivalTime === 0 ? Infinity : y.arrivalTime;
+    const ax = arrivalKey(x.arrivalTime);
+    const ay = arrivalKey(y.arrivalTime);
     if (ax !== ay) return ax - ay;
     return x.vehicleId < y.vehicleId ? -1 : x.vehicleId > y.vehicleId ? 1 : 0;
   });

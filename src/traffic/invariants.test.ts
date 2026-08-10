@@ -37,7 +37,7 @@ import { buildRoute, sampleRoute } from './route';
 import { step } from './step';
 import { SegmentKind, TrafficEventKind, VehicleMode, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
-import { DEFAULT_IDM, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
+import { DEFAULT_IDM, MAX_DECELERATION, SIMULTANEOUS_EPS, STOPPED_SPEED } from './tuning';
 import { CAR_LENGTH, TILE_SIZE } from '../constants';
 
 const DT = 1 / 60;
@@ -388,10 +388,25 @@ function expectClean(result: SweepResult, name: string): void {
  * still passes at 17 of 20, and the sweep's other bounds are all one-sided.
  */
 function expectFreeFlowing(result: SweepResult, name: string): void {
-  // A hard bound on the mean, and a bound on how much of the run was spent stationary. Both
-  // are stated with an order of magnitude of headroom over what the model actually does —
-  // 38.2-38.4px/s of a 40px/s limit, and 51-76 stopped vehicle-ticks of ~70 000 — because
-  // they are here to catch a collapse, not to pin the tuning.
+  // Two bounds, and they are not equally good. **The stationary fraction is the detector;**
+  // the mean speed is a coarse backstop, and whoever hits one of these should read that
+  // sentence first.
+  //
+  // Measured on the shipped model: horizontal corridors run at 38.18-38.35px/s of a 40px/s
+  // limit with 51-76 stopped vehicle-ticks of 62 000-74 000 (a fraction of 0.0008-0.0010);
+  // the verticals, which this also guards, run at 37.86-37.88px/s with 32-35 of ~23 400
+  // (0.0014-0.0015). So the mean-speed bound has **6%** of headroom, not an order of
+  // magnitude, and on vertical seed 2 the fraction bound's kill margin against the mutant is
+  // 1.46x rather than the 50x the horizontals give.
+  //
+  // The mean is also **load-confounded**: raise the corridor to 40 cars and the healthy model
+  // scores 33.13, *below* the 32.4-33.5 the mutant produces at 20 cars, with zero violations
+  // and zero stalls. A legitimate density increase would therefore fail on "mean speed" with
+  // nothing wrong. The stationary fraction does not have that defect — it *falls* with density
+  // on a healthy model (0.00093 -> 0.00045) while rising 30-50x under the mutant, because
+  // stopping is what it measures rather than how fast the queue is moving. Both fire
+  // independently today, so both stay; if the mean ever blocks a density change, it is the
+  // one to reconsider.
   expect(result.meanSpeed, `${name}: mean speed`).toBeGreaterThan(SPEED_LIMIT * 0.9);
   expect(result.yields / result.vehicleTicks, `${name}: fraction of vehicle-ticks stationary`)
     .toBeLessThan(0.01);
@@ -423,9 +438,14 @@ function expectBusy(result: SweepResult, name: string, minArrivals: number): voi
 
 /**
  * Four seeds. Two were tried, on the reasoning that they differ only in initial spacing and
- * speeds of one shape — but the saving was measured at approximately nothing: vitest runs
- * files in parallel and this one is not the critical path, so wall clock was 1.82-2.03s with
- * the extra seeds and 1.83-2.03s without. Two samples of coverage for no time is a bad trade.
+ * speeds of one shape, and reverted — but the reason is machine-dependent and worth stating
+ * as such. On the machine this was developed on the saving was inside the noise: `npm test`
+ * ran 1.82-2.03s with four seeds and 1.83-2.03s with two, because vitest runs files in
+ * parallel and `ObstacleSystem.test.ts` plus worker startup dominated. On a 10-core machine
+ * it does *not* vanish — 2.53s against 2.13s, with both files removed at 1.87s — so the extra
+ * seeds cost 10-16% there and this file is on the critical path. Coverage won that trade at
+ * a few hundred milliseconds; a bigger sweep should re-measure rather than inherit the
+ * conclusion.
  */
 const CORRIDOR_SEEDS = [1, 7, 42, 1337];
 
@@ -814,5 +834,76 @@ describe('traffic invariants', () => {
     // …and it did not merely wait less: it actually got through.
     expect(world.vehicles.some(v => v.routeId === 'down'), 'the waiter crossed and arrived')
       .toBe(false);
+  });
+
+  /**
+   * The same starvation, on a **cold clock** — the case the test above cannot reach.
+   *
+   * `arrivalTime`'s zero sentinel is consulted on two keys: the arrival time itself, and the
+   * yield rank, which sorts *first*. Mapping the sentinel on only one of them left a car whose
+   * own stamp fell within `SIMULTANEOUS_EPS` of zero counting as simultaneous with every
+   * rolling car for ever, so each of them in turn could outrank it under give-way-to-the-right.
+   *
+   * A stamp that small needs a vehicle at rest in the opening 50ms of a world's life, which is
+   * why the test above misses it: its waiter is rolling at the limit and does not stop until
+   * t=5.567, a hundred times `SIMULTANEOUS_EPS`. Warm the clock to t=100 and the identical
+   * world crosses in 6.12s, which is what identifies the clock rather than the geometry.
+   *
+   * This is a Task 9 shape, not an exotic one: an adapter builds a world at t=0 and places
+   * cars on it. Measured before the fix — starved for the whole 60s run, resting at arc 166.3;
+   * five of the sixteen cells of the approach-length x headway sweep starved the same way.
+   */
+  it('does not starve a car stamped in the first tick of a cold world', () => {
+    const world = createWorld();
+    expect(world.time, 'a world starts at t=0, which is the whole point here').toBe(0);
+
+    world.routes.set('down', buildRoute(span('down', Array.from({ length: 10 }, (_, gy) =>
+      [5, gy, gy === 5 ? X : R] as Cell)))!);
+    world.routes.set('across', buildRoute(span('across', Array.from({ length: 8 }, (_, i) =>
+      [3 + i, 5, i === 2 ? X : R] as Cell)))!);
+
+    // At rest, so it is stamped on the very first tick — `approachingJunctionCell` has no
+    // horizon, so a stationary car anywhere upstream of a junction is queued for it.
+    world.vehicles.push(car('W', 'down', 0, 0));
+
+    let stall = 0;
+    let worst = 0;
+    let firstStamp = -1;
+    let crossedAt = -1;
+    let n = 0;
+    for (let tick = 0; tick < 3600; tick++) {
+      if (tick % 120 === 0) world.vehicles.push(car(`a${n++}`, 'across', 0, SPEED_LIMIT));
+      const w = world.vehicles.find(v => v.id === 'W');
+      const before = w?.arcDistance ?? 0;
+      const events = step(world, DT);
+      const after = world.vehicles.find(v => v.id === 'W');
+      if (after) {
+        if (firstStamp < 0 && after.arrivalTime > 0) firstStamp = after.arrivalTime;
+        stall = after.arcDistance - before < 1e-6 ? stall + DT : 0;
+        worst = Math.max(worst, stall);
+        // The junction cell is centred on arc 200; past 220 it is through and away.
+        if (crossedAt < 0 && after.arcDistance > 220) crossedAt = tick;
+      }
+      for (const e of events) {
+        const i = world.vehicles.findIndex(v => v.id === e.vehicleId);
+        if (i >= 0) world.vehicles.splice(i, 1);
+      }
+    }
+
+    // The premise that makes this fixture the interesting one, asserted rather than assumed:
+    // the waiter's stamp really does land inside the simultaneity window of zero. Without
+    // this, a future change to spawn speeds or to `STOPPED_SPEED` could quietly turn it into
+    // a duplicate of the test above.
+    expect(firstStamp, 'stamped in the opening tick').toBeGreaterThan(0);
+    expect(firstStamp, 'and within SIMULTANEOUS_EPS of the sentinel')
+      .toBeLessThanOrEqual(SIMULTANEOUS_EPS);
+    expect(n, 'cars offered to the cross route').toBeGreaterThan(25);
+    expect(world.vehicles.filter(v => v.routeId === 'across').length,
+      'the cross stream kept clearing').toBeLessThan(n);
+
+    expect(worst, 'longest standstill short of the destination').toBeLessThan(15);
+    expect(crossedAt, 'it crossed the junction').toBeGreaterThanOrEqual(0);
+    expect(crossedAt * DT, 'and did so promptly, holding the oldest stamp at the line')
+      .toBeLessThan(10);
   });
 });

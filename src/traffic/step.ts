@@ -346,11 +346,21 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     //
     // No vehicle can be starved by this, and the argument is **monotonicity, not permanence**.
     // `world.time` only increases, so any re-stamp is strictly later than the one it replaced,
-    // and a car still rolling carries the sentinel, which sorts last. For a car holding stamp
-    // T, the set of vehicles that can outrank it — those holding a stamp in (0, T) — is fixed
-    // at T and can only shrink as they are admitted. A stream of fresh arrivals, however
-    // dense, can therefore never raise its rank; `SIMULTANEOUS_EPS` keeps them out of its
-    // yield rank too, since they are not simultaneous with it.
+    // and a car still rolling carries the sentinel, which `arrivalKey` sorts last. For a car
+    // holding stamp T, the set that can outrank it on the arrival key — those holding a stamp
+    // in (0, T) — is fixed at T, and only leaves it: a member is removed when it crosses, and
+    // no vehicle can join, because every later stamp is greater than T. Membership never grows.
+    //
+    // Fresh arrivals are not *entirely* excluded, and the earlier version of this note said
+    // they were. A car stamping in (T, T+EPS] **does** enter T's yield rank, which is the key
+    // that sorts first. What bounds it is that the window closes: `world.time` passes T+EPS
+    // and stays past it, so T's rank is 0 from then on and only the finite set above can
+    // precede it. A dense stream delays a waiter by at most that window, not indefinitely.
+    //
+    // Note also that the sentinel is **comparator-only** in the sense that matters: it is a
+    // property of `arrivalKey`, and every consumer of `arrivalTime` in `junction.ts` has to go
+    // through it. `yieldRank` comparing raw times while the comparator mapped them is exactly
+    // how a whole class of starvation stayed invisible — see `arrivalKey` there.
     const queueingFor = approaching.get(v.id);
     if (queueingFor === undefined) {
       v.arrivalTime = 0;
