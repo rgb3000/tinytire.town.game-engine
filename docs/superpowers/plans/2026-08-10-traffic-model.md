@@ -1436,6 +1436,34 @@ export function maneuversConflict(
 }
 
 /**
+ * `arrivalTime` is 0 while a vehicle is still rolling. Every comparison must map that to
+ * `Infinity` — "has not arrived yet", not "arrived at the beginning of time".
+ *
+ * This lives in one place because it did not, twice. The sentinel was first applied only
+ * in `admit`'s comparator while `yieldRank` compared raw values — and `yieldRank` sorts
+ * FIRST, so a rolling car still outranked a waiter stamped within `SIMULTANEOUS_EPS` of
+ * world creation. Measured at 53s and still standing, on 5 of 16 swept configurations.
+ */
+function arrivalKey(t: number): number {
+  return t === 0 ? Infinity : t;
+}
+
+/**
+ * Whether two arrivals count as simultaneous for *rechts vor links*.
+ *
+ * The `ka === kb` short circuit is load-bearing, not defensive: two rolling cars both key
+ * to `Infinity`, and `Math.abs(Infinity - Infinity)` is `NaN`, which fails a `<=` test.
+ * Without it, two rolling cars would stop being simultaneous and the give-way rule would
+ * not apply between them at all.
+ */
+function simultaneous(a: number, b: number): boolean {
+  const ka = arrivalKey(a);
+  const kb = arrivalKey(b);
+  if (ka === kb) return true;
+  return Math.abs(ka - kb) <= SIMULTANEOUS_EPS;
+}
+
+/**
  * How many simultaneous, conflicting candidates have priority over this one under
  * *rechts vor links*.
  *
@@ -1448,13 +1476,7 @@ function yieldRank(c: JunctionCandidate, all: JunctionCandidate[]): number {
   let rank = 0;
   for (const other of all) {
     if (other.vehicleId === c.vehicleId) continue;
-    // Same sentinel as the comparator: 0 means "still rolling", not "arrived at time
-    // zero". Comparing it raw made every rolling car simultaneous with any waiter stamped
-    // inside the first EPS of world time, and yieldRank sorts BEFORE arrival time — so
-    // that waiter could be outranked forever. Measured at 60s and still standing.
-    const ca = c.arrivalTime === 0 ? Infinity : c.arrivalTime;
-    const oa = other.arrivalTime === 0 ? Infinity : other.arrivalTime;
-    if (Math.abs(oa - ca) > SIMULTANEOUS_EPS) continue;
+    if (!simultaneous(c.arrivalTime, other.arrivalTime)) continue;
     if (!maneuversConflict(c.entry, c.exit, other.entry, other.exit)) continue;
     if (other.entry === YIELD_TO_DIRECTION[c.entry]) rank++;
   }
@@ -1481,8 +1503,8 @@ export function admit(candidates: JunctionCandidate[]): Set<string> {
     // at speed would outrank one queued for a minute — and any cross stream whose
     // headway is shorter than a waiter's approach travel time would starve it forever.
     // Measured at 53.9s and counting before this was corrected.
-    const ax = x.arrivalTime === 0 ? Infinity : x.arrivalTime;
-    const ay = y.arrivalTime === 0 ? Infinity : y.arrivalTime;
+    const ax = arrivalKey(x.arrivalTime);
+    const ay = arrivalKey(y.arrivalTime);
     if (ax !== ay) return ax - ay;
     return x.vehicleId < y.vehicleId ? -1 : x.vehicleId > y.vehicleId ? 1 : 0;
   });
