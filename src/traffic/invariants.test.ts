@@ -543,6 +543,36 @@ describe('traffic invariants', () => {
     expect(queue[0]).toBeLessThan(CAR_LENGTH + DEFAULT_IDM.s0 + 1);
   });
 
+  it('does not make an uncontested car stop at a junction', () => {
+    // The other half of the arrival-time sentinel, and the regression this fix could most
+    // easily have been: yielding to a queue must not become stopping at every junction.
+    // A lone car loses the arrival key to nobody, so it should cross without ever coming near
+    // a standstill — measured, it dips to 34.26px/s from a 40px/s limit, which is IDM easing
+    // through the geometry rather than the junction holding it.
+    const world = createWorld();
+    const route = buildRoute(span('r', Array.from({ length: 10 }, (_, gx) =>
+      [gx, 5, gx === 5 ? X : R] as Cell)))!;
+    world.routes.set('r', route);
+    // Premise: there really is a junction on the way, at cell 5.
+    expect(route.segments[5].kind).toBe(X);
+    world.vehicles.push(car('lone', 'r', 0, SPEED_LIMIT));
+
+    let minSpeed = Infinity;
+    let arrived = false;
+    for (let tick = 0; tick < 900; tick++) {
+      const events = step(world, DT);
+      const v = world.vehicles[0];
+      // Only while it is short of the destination: a car is *supposed* to stop when it
+      // arrives, and the route end is a stop line like any other.
+      if (v.arcDistance < route.cellDist[7]) minSpeed = Math.min(minSpeed, v.speed);
+      for (const e of events) if (e.kind === TrafficEventKind.Arrived) arrived = true;
+    }
+
+    expect(arrived, 'it got there').toBe(true);
+    expect(minSpeed, 'never brought near a standstill by the junction')
+      .toBeGreaterThan(SPEED_LIMIT * 0.75);
+  });
+
   it('keeps a car off one parked inside a junction exit cell', () => {
     // The don't-block-the-box rule seen from the outside: with the far side permanently
     // occupied, the approaching car must hold at the stop line rather than enter a junction
