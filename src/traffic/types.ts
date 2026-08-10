@@ -105,9 +105,20 @@ export interface TrafficWorld {
 /**
  * Events report things that *happened*, not per-tick state. Continuous quantities like
  * distance travelled live on the vehicle, so a busy frame allocates nothing.
+ *
+ * One vocabulary, two emitters. `step` emits `Arrived`. `Blocked` is emitted by
+ * `TrafficAdapter` and never by anything in here, deliberately: "blocked" is a claim about
+ * a *remedy* — some length of standstill after which the game should reroute or strand the
+ * car — and both the threshold and the remedy are game-side. The kind lives here anyway so
+ * that the adapter's caller has a single event stream to switch on rather than two.
  */
 export const TrafficEventKind = {
   Arrived: 0,
+  /**
+   * A vehicle has stood still long enough that something outside the simulation must
+   * intervene. See `TrafficAdapter.update`.
+   */
+  Blocked: 1,
 } as const;
 export type TrafficEventKind = (typeof TrafficEventKind)[keyof typeof TrafficEventKind];
 
