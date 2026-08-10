@@ -801,3 +801,154 @@ describe('TrafficAdapter configuration', () => {
     expect(slowest).toBeLessThanOrEqual(TILE);
   });
 });
+
+describe('TrafficAdapter bookkeeping', () => {
+  it('drops a removed car\'s route as well as its vehicle', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 8);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const cars = [makeCar(), makeCar(), makeCar()];
+    for (const car of cars) adapter.installRoute(car, gridPath(8), false);
+    expect(adapter.debugCounts()).toEqual({ vehicles: 3, routes: 3 });
+
+    adapter.removeVehicle(cars[0]);
+    adapter.removeVehicle(cars[2]);
+
+    // A route outliving its vehicle is invisible to everything except memory: every
+    // consumer reaches one through `vehicle.routeId`, so nothing would ever read it again.
+    expect(adapter.debugCounts()).toEqual({ vehicles: 1, routes: 1 });
+  });
+
+  it('rebuilding a car\'s route replaces it rather than accumulating', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 8);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    for (let i = 0; i < 5; i++) adapter.installRoute(car, gridPath(8), true);
+    expect(adapter.debugCounts()).toEqual({ vehicles: 1, routes: 1 });
+  });
+});
+
+describe('TrafficAdapter crossings', () => {
+  function eastWestHighway(): { adapter: TrafficAdapter; hw: Highway } {
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    for (const gx of [0, 1, 2, 10, 11]) roads.placeRoad(gx, 0);
+    roads.connectRoads(0, 0, 1, 0);
+    roads.connectRoads(1, 0, 2, 0);
+    roads.connectRoads(10, 0, 11, 0);
+    grid.recomputeIntersectionFlags();
+    const highways = new HighwaySystem();
+    const { cp1, cp2 } = defaultControlPoints({ gx: 2, gy: 0 }, { gx: 10, gy: 0 });
+    const hw = highways.addHighway({ gx: 2, gy: 0 }, { gx: 10, gy: 0 }, cp1, cp2);
+    return { adapter: new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, highways), hw };
+  }
+
+  it('orients the crossing the way the car travels it', () => {
+    // A highway is stored once and driven in both directions. Taking the stored order for a
+    // car entering at `toPos` would put the far end of the crossing at the near joint —
+    // eight tiles from where the car actually is, which `buildRoute` refuses outright, so
+    // the symptom is a car that cannot be routed home at all.
+    const { adapter, hw } = eastWestHighway();
+    const car = makeCar();
+    const path: PathStep[] = [
+      ...rowPath(11, 10, 0),
+      { kind: 'highway', highwayId: hw.id, from: { gx: 10, gy: 0 }, to: { gx: 2, gy: 0 } },
+      ...rowPath(2, 0, 0),
+    ];
+    expect(adapter.installRoute(car, path, false)).toBe(true);
+    const route = adapter.getRouteFor(car)!;
+
+    expect(route.points[0].x).toBeGreaterThan(11 * TILE);
+    expect(route.points[route.points.length - 1].x).toBeLessThan(TILE);
+    expect(route.cells.map(c => c.gx)).toEqual([11, 10, 2, 1, 0]);
+  });
+
+  it('carries the highway speed multiplier onto the crossing', () => {
+    const { adapter, hw } = eastWestHighway();
+    const car = makeCar();
+    const path: PathStep[] = [
+      ...rowPath(0, 2, 0),
+      { kind: 'highway', highwayId: hw.id, from: { gx: 2, gy: 0 }, to: { gx: 10, gy: 0 } },
+      ...rowPath(10, 11, 0),
+    ];
+    adapter.installRoute(car, path, false);
+    const route = adapter.getRouteFor(car)!;
+
+    const crossing = route.segments.find(s => s.kind === SegmentKind.Highway)!;
+    const base = DEFAULT_GAME_CONSTANTS.CAR_SPEED * TILE;
+    expect(crossing.speedLimit).toBeCloseTo(base * DEFAULT_GAME_CONSTANTS.HIGHWAY_SPEED_MULTIPLIER, 6);
+    // Premise: the multiplier is not 1, or the assertion above would hold either way.
+    expect(DEFAULT_GAME_CONSTANTS.HIGHWAY_SPEED_MULTIPLIER).toBeGreaterThan(1);
+
+    // And it is reached: the car genuinely outruns the road limit while on the crossing.
+    let fastest = 0;
+    for (let i = 0; i < 60 * 15; i++) { adapter.update(DT); fastest = Math.max(fastest, adapter.getSpeed(car)); }
+    expect(fastest).toBeGreaterThan(base * 1.5);
+    expect(adapter.getArc(car)).toBeGreaterThan(route.length - TILE);
+  });
+
+  it('lifts a car off the ground over a crossing and sets it down again', () => {
+    const { adapter, hw } = eastWestHighway();
+    const car = makeCar();
+    const path: PathStep[] = [
+      ...rowPath(0, 2, 0),
+      { kind: 'highway', highwayId: hw.id, from: { gx: 2, gy: 0 }, to: { gx: 10, gy: 0 } },
+      ...rowPath(10, 11, 0),
+    ];
+    adapter.installRoute(car, path, false);
+
+    adapter.writeBack([car]);
+    expect(car.onHighway).toBe(false);
+    expect(car.elevationY).toBe(0);
+
+    let liftedAt = -1;
+    for (let i = 0; i < 60 * 15; i++) {
+      adapter.update(DT);
+      adapter.writeBack([car]);
+      if (car.onHighway && liftedAt < 0) liftedAt = i * DT;
+    }
+    expect(liftedAt).toBeGreaterThan(0);
+    expect(car.onHighway).toBe(false);
+    expect(car.elevationY).toBe(0);
+  });
+});
+
+describe('TrafficAdapter watchdog reset', () => {
+  it('gives a rerouted car the full timeout again before reporting it', () => {
+    // The caller's remedy for `Blocked` is a reroute. If the counter survived one, the next
+    // report would arrive a tick later and the caller would be told the same thing over and
+    // over about a car it had only just acted on.
+    const { grid } = crossGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const path = rowPath(0, 11, 5);
+    const queued = makeCar();
+    const abandoned = makeCar();
+    placeAt(adapter, queued, path, 170);
+    placeAt(adapter, abandoned, path, 240);
+    adapter.setParked(abandoned, true);
+
+    const rerouteAfter = Math.round(60 * (UNIVERSAL_STUCK_TIMEOUT - 1));
+    let blockedBeforeReroute = 0;
+    for (let i = 0; i < rerouteAfter; i++) {
+      for (const event of adapter.update(DT)) {
+        if (event.kind === TrafficEventKind.Blocked) blockedBeforeReroute++;
+      }
+    }
+    // Premise: it is one second short of the threshold, so a surviving counter would fire
+    // almost at once and a reset one would not fire for another eight seconds.
+    expect(blockedBeforeReroute).toBe(0);
+    expect(adapter.getStalledSeconds(queued)).toBeCloseTo(UNIVERSAL_STUCK_TIMEOUT - 1, 1);
+
+    adapter.installRoute(queued, path, true);
+    expect(adapter.getStalledSeconds(queued)).toBe(0);
+
+    let blockedAfter = 0;
+    for (let i = 0; i < 60 * 3; i++) {
+      for (const event of adapter.update(DT)) {
+        if (event.kind === TrafficEventKind.Blocked) blockedAfter++;
+      }
+    }
+    expect(blockedAfter).toBe(0);
+  });
+});

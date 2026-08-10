@@ -240,6 +240,18 @@ export class TrafficAdapter {
     return this.vehiclesByCar.get(car.id)?.arcDistance ?? 0;
   }
 
+  /**
+   * Vehicle and route counts. For tests and the debug overlay.
+   *
+   * The two must stay equal: routes are keyed by car id and only `removeVehicle` drops
+   * them, so a route outliving its vehicle is a leak that nothing else can see — every
+   * consumer reaches a route through `vehicle.routeId`, so an orphan is invisible while
+   * still holding a few hundred points per despawned car for the life of the session.
+   */
+  debugCounts(): { vehicles: number; routes: number } {
+    return { vehicles: this.world.vehicles.length, routes: this.world.routes.size };
+  }
+
   /** Where the simulation currently holds this car, or null if it holds no route for it. */
   private simulatedPosition(car: Car): PixelPos | null {
     const vehicle = this.vehiclesByCar.get(car.id);
