@@ -399,14 +399,18 @@ function expectFreeFlowing(result: SweepResult, name: string): void {
   // magnitude, and on vertical seed 2 the fraction bound's kill margin against the mutant is
   // 1.46x rather than the 50x the horizontals give.
   //
-  // The mean is also **load-confounded**: raise the corridor to 40 cars and the healthy model
-  // scores 33.13, *below* the 32.4-33.5 the mutant produces at 20 cars, with zero violations
-  // and zero stalls. A legitimate density increase would therefore fail on "mean speed" with
-  // nothing wrong. The stationary fraction does not have that defect — it *falls* with density
-  // on a healthy model (0.00093 -> 0.00045) while rising 30-50x under the mutant, because
-  // stopping is what it measures rather than how fast the queue is moving. Both fire
-  // independently today, so both stay; if the mean ever blocks a density change, it is the
-  // one to reconsider.
+  // The mean is also **load-confounded**, which is the sharper objection. Measured on the
+  // healthy model at rising density on this very corridor: 20 cars 38.43, 30 cars 36.40,
+  // 40 cars 33.27, 50 cars 28.11 — all with zero violations, zero stalls, and an unchanged
+  // 32.17px minimum gap. So a legitimate 2x density increase fails this bound while nothing
+  // is wrong, and even 30 cars sits 1% above it. 40 cars scores *below* the 32.40-33.48 the
+  // mutant produces at 20.
+  //
+  // The stationary fraction has no such defect: on the healthy model it *falls* monotonically
+  // with density — 0.00093, 0.00071, 0.00056, 0.00044 over the same four — while rising 30-50x
+  // under the mutant, because what it measures is stopping rather than how fast a longer queue
+  // gets to move. Both fire independently today, so both stay; if the mean ever blocks a
+  // density change, it is the one to reconsider, and the fraction is the one to trust.
   expect(result.meanSpeed, `${name}: mean speed`).toBeGreaterThan(SPEED_LIMIT * 0.9);
   expect(result.yields / result.vehicleTicks, `${name}: fraction of vehicle-ticks stationary`)
     .toBeLessThan(0.01);
