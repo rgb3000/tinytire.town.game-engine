@@ -1521,7 +1521,7 @@ git commit -m "feat(traffic): resolve junctions by chord conflict and acyclic gr
 
 **Interfaces:**
 - Consumes: `LaneIndex` from `./lanes`; `Route`, `Vehicle`, `TrafficWorld` from `./types`.
-- Produces: `Constraint { arc: number; speed: number }`, `nearestConstraint(world, vehicle, index, admittedByJunction): Constraint`, `junctionEntryArc(route, cellIndex): number`.
+- Produces: `Constraint { arc: number; speed: number }`, `nearestConstraint(world, vehicle, index, admitted: Map<string, number>): Constraint`, `junctionKey(gx, gy): number`, `junctionEntryArc(route, cellIndex): number`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1690,7 +1690,7 @@ export function nearestConstraint(
   world: TrafficWorld,
   vehicle: Vehicle,
   index: LaneIndex,
-  admitted: Set<string>,
+  admitted: Map<string, number>,
 ): Constraint {
   const route = world.routes.get(vehicle.routeId);
   if (!route) return { arc: vehicle.arcDistance, speed: 0 };
@@ -1906,15 +1906,11 @@ import { idmAcceleration } from './headway';
 import { LaneIndex, edgeIndexAt } from './lanes';
 import { admit } from './junction';
 import type { JunctionCandidate } from './junction';
-import { nearestConstraint, isInsideJunction } from './obstacles';
+import { nearestConstraint, isInsideJunction, junctionKey } from './obstacles';
 import { segmentAt, speedLimitAt } from './route';
 import { DEFAULT_IDM, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
 import { SegmentKind, TrafficEventKind, VehicleMode } from './types';
 import type { Route, TrafficEvent, TrafficWorld, Vehicle } from './types';
-
-function tileKey(gx: number, gy: number): number {
-  return gx | (gy << 8);
-}
 
 /**
  * The junction cell a vehicle is approaching or occupying, or -1.
@@ -1980,7 +1976,7 @@ function buildJunctionCandidates(world: TrafficWorld): Map<number, JunctionCandi
       exitHasRoom: exitHasRoom(world, route, cellIndex),
     };
 
-    const key = tileKey(junction.gx, junction.gy);
+    const key = junctionKey(junction.gx, junction.gy);
     const list = byJunction.get(key);
     if (list) list.push(candidate);
     else byJunction.set(key, [candidate]);
@@ -2027,10 +2023,14 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
 
   laneIndex.rebuild(world);
 
+  // Keyed by junction, not a flat set. Membership alone would mean "exempt from every
+  // stop line ahead": adjacent cells can both be junctions (`_isIntersection` is
+  // `cardinalConnectionCount >= 3`), so a car admitted to A would skip B's stop line and
+  // exit straight into B's cross traffic.
   const junctions = buildJunctionCandidates(world);
-  const admitted = new Set<string>();
-  for (const candidates of junctions.values()) {
-    for (const id of admit(candidates)) admitted.add(id);
+  const admitted = new Map<string, number>();
+  for (const [key, candidates] of junctions) {
+    for (const id of admit(candidates)) admitted.set(id, key);
   }
 
   // Pass one: decide.
