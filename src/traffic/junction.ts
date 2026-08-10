@@ -4,12 +4,26 @@ import { LANE_OFFSET, TILE_SIZE } from '../constants';
 import { SIMULTANEOUS_EPS } from './tuning';
 
 export interface JunctionCandidate {
+  /**
+   * Must be unique among the candidates of a single `admit` call. Ranks are keyed by it,
+   * so a duplicate collapses two vehicles into one rank, makes the comparator return 0 for
+   * the pair (destroying order independence), and loses one of them from the result set.
+   */
   vehicleId: string;
   /** Direction of travel into the junction. */
   entry: Direction;
   /** Direction of travel out of the junction. */
   exit: Direction;
-  /** Already past the entry boundary. Absolute priority. */
+  /**
+   * Already past the entry boundary. Absolute priority.
+   *
+   * A vehicle inside the junction **must be offered as a candidate on every tick until it
+   * has left**, and must keep `inside` set for the whole crossing. Safety here is not a
+   * property of the vehicle but of the set: an inside vehicle sorts first and then blocks
+   * every conflicting candidate behind it, which is the only thing preventing two
+   * conflicting vehicles being inside at once. Drop it from the list for a single tick and
+   * the junction will happily admit a crossing stream into it.
+   */
   inside: boolean;
   /** When this vehicle first began waiting, in world seconds. */
   arrivalTime: number;
@@ -116,6 +130,10 @@ function yieldRank(c: JunctionCandidate, all: JunctionCandidate[]): number {
  *
  * A car passed over this tick is not starved: next tick it is ranked against whoever is
  * there then, with an arrival time now earlier than theirs, and wins on that key.
+ *
+ * Two preconditions the caller owns, both load-bearing for safety rather than for taste:
+ * `vehicleId` must be unique within the call, and every vehicle currently inside the
+ * junction must appear in `candidates`. See `JunctionCandidate`.
  */
 export function admit(candidates: JunctionCandidate[]): Set<string> {
   // Ranks are computed once against the unsorted input, so the comparator is a pure

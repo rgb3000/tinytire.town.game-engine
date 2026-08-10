@@ -237,6 +237,24 @@ describe('admit', () => {
     expect(got.has('a')).toBe(false);
   });
 
+  it('does not give way to a car on the right whose path never crosses ours', () => {
+    // Give-way-to-the-right ranks only *conflicting* cars. A car stalled at a junction
+    // deferring to someone it would never have met is the exact symptom this task removes.
+    //
+    // 'c' travels Left and turns Down; 'a' travels Up and turns Right. Their chords are
+    // parallel, so they can go together. 'c' is on 'a's right (YIELD_TO_DIRECTION[Up] is
+    // Left), and if that counted, 'a' would be outranked by 'b' — which conflicts with
+    // both — and the junction would pass one car instead of two.
+    const got = admit([
+      candidate('a', Direction.Up, Direction.Right),
+      candidate('b', Direction.Down, Direction.Right),
+      candidate('c', Direction.Left, Direction.Down),
+    ]);
+    expect(maneuversConflict(Direction.Up, Direction.Right, Direction.Left, Direction.Down))
+      .toBe(false);
+    expect(got).toEqual(new Set(['a', 'c']));
+  });
+
   it('lets the earlier arrival through when arrivals are clearly separated', () => {
     const got = admit([
       candidate('a', Direction.Right, Direction.Right, { arrivalTime: 5 }),
