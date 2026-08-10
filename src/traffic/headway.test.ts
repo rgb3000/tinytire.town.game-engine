@@ -135,6 +135,29 @@ describe('idmAcceleration', () => {
     expect(accs[accs.length - 1]).toBeGreaterThan(0);
   });
 
+  it('scales the anticipation term by the comfortable deceleration', () => {
+    // `b` enters the model in exactly one place: the 2*sqrt(a*b) denominator of the
+    // anticipation term, which is what makes this more than a time-headway controller. It
+    // is invisible unless the closing speed is nonzero, so pin it with an exact value at a
+    // leader that is moving but slower — the loose bracket on the clamp threshold below
+    // tolerates `b` anywhere from roughly 28 to 694.
+    const v = V_ROAD;
+    const gap = 60;
+    const leaderSpeed = 20;
+
+    // At the desired speed the free-road term is exactly zero, so the whole result is the
+    // interaction term: -a * (s*/s)^2 with s* = s0 + v*T + v*dv / (2*sqrt(a*b)).
+    const sStar = P.s0 + v * P.T + (v * (v - leaderSpeed)) / (2 * Math.sqrt(P.a * P.b));
+    const ratio = sStar / gap;
+    const expected = -P.a * ratio * ratio;
+
+    // Cross-checked by hand against the default parameters so this derivation cannot drift
+    // silently: 2*sqrt(a*b) = 97.9796, s* = 46.1650, acc = -23.6800. Swapping `b` for `a`
+    // in the denominator gives s* = 48 and -25.6 — a difference of 1.92.
+    expect(expected).toBeCloseTo(-23.68, 2);
+    expect(idmAcceleration(v, V_ROAD, gap, leaderSpeed, P)).toBeCloseTo(expected, 9);
+  });
+
   it('never lets the desired gap fall below s0, however fast the leader escapes', () => {
     // A leader pulling away hard would drive the dynamic term negative; clamped at zero,
     // the desired gap is exactly s0. Sitting at s0 while already at the speed limit is
