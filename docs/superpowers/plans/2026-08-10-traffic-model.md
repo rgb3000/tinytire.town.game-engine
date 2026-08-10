@@ -554,7 +554,13 @@ describe('splitAt', () => {
     const route = buildRoute(straight(4))!;
     const { travelled, remaining } = splitAt(route, route.length);
     expect(travelled).toHaveLength(route.points.length);
-    expect(remaining).toHaveLength(1);
+    // Mirror of the arc-0 case: `remaining` is a degenerate two-point stub, both points
+    // pinned to the route's final position. `hi` is capped at the last index, so t === 1
+    // and the cut coincides with points[hi]. Consumers must tolerate a zero-length half
+    // at EITHER end, not only at arc 0.
+    expect(remaining).toHaveLength(2);
+    expect(remaining[0]).toEqual(remaining[1]);
+    expect(remaining[0]).toEqual(route.points[route.points.length - 1]);
   });
 
   it('shares the split point between both halves', () => {
@@ -3191,6 +3197,8 @@ git commit -m "refactor(core): ask the adapter which cars depend on a road cell"
 ```
 
 Where `addRouteLine(group, points, color, opacity, dashed)` is the existing `Line2`/`LineGeometry`/`LineMaterial` construction extracted from `buildFromSmoothPath` and `buildFromGridPath`, taking a point list instead of reading car fields. Delete `buildFromSmoothPath` and `buildFromGridPath`.
+
+**`addRouteLine` must return early on a degenerate half.** `splitAt` yields a two-point stub whose points coincide at *both* extremes — `travelled` at arc 0, and `remaining` once the car reaches the end. A car sitting at its destination therefore hands `remaining` a zero-length polyline every frame. `LineGeometry.setPositions` with two identical points produces a degenerate segment that `Line2` renders as a stray dot or, with `dashed`, triggers a division by zero in `computeLineDistances`. Guard with a squared-distance check against a small epsilon before building geometry, and cover both ends with a test.
 
 The layer needs the adapter. Pass it in from wherever `CarRouteLayer.update` is called in `Renderer`/`IsometricRenderer` — find with `grep -rn "CarRouteLayer" src/rendering/`. Replace the cached-invalidation field `this.cachedPathIndex = closestCar.pathIndex` (`:72`) with `this.cachedArc = adapter.getArc(closestCar)`, comparing with a small epsilon so the geometry is not rebuilt every frame:
 
