@@ -1,0 +1,430 @@
+/**
+ * Collapsing every reason to slow down into one virtual leader is the fix for two
+ * independently-tuned mechanisms disagreeing about how hard to brake.
+ *
+ * The model this replaces multiplied the speed limit by
+ * `Math.min(followingMult, intersectionMult)` (`CarMovement.ts:129`), where the two
+ * multipliers came from `followingSpeedMultiplier` and `computeIntersectionYield` in
+ * `CarTrafficManager.ts`. `minOfTwoMultipliers` below is that rule ported to this module's
+ * vocabulary, and two tests assert it cannot produce the answer this module must:
+ *
+ *  - a following ramp on the gap alone is blind to the leader's *speed*, so it treats a
+ *    stationary car and a car matching your own speed identically;
+ *  - the intersection ramp reached zero `INTERSECTION_STOP_DIST` from the junction
+ *    *centre*, which is inside the junction cell — cars stopped in the box.
+ *
+ * Expectations are derived from tile arithmetic (`TILE_SIZE`, `LANE_OFFSET`, `CAR_LENGTH`)
+ * and from the arcs handed to the vehicles as input, never by reading a value back out of
+ * the constraint under test. Where a test depends on a premise — that one arc is nearer
+ * than another, that a cell really is an intersection, that the reference model is not
+ * vacuously zero — the premise is asserted inline.
+ */
+import { describe, it, expect } from 'vitest';
+import { buildRoute, segmentAt, speedLimitAt } from './route';
+import { LaneIndex } from './lanes';
+import { idmAcceleration } from './headway';
+import { DEFAULT_IDM } from './tuning';
+import { junctionEntryArc, isInsideJunction, nearestConstraint } from './obstacles';
+import { SegmentKind, VehicleMode, createWorld } from './types';
+import type { Route, RouteInput, TrafficWorld, Vehicle } from './types';
+import {
+  CAR_COMFORT_GAP, CAR_LENGTH, CAR_MIN_GAP,
+  INTERSECTION_DECEL_DIST, INTERSECTION_STOP_DIST, TILE_SIZE,
+} from '../constants';
+
+const R = SegmentKind.Road;
+const X = SegmentKind.Intersection;
+
+/** A straight west-to-east route, one cell per kind, starting at the origin cell. */
+function road(id: string, kinds: SegmentKind[], speedLimit = 40): RouteInput {
+  return {
+    id,
+    spans: [{
+      kind: 'grid',
+      cells: kinds.map((kind, i) => ({
+        pos: { gx: i, gy: 0 },
+        kind,
+        speedLimit,
+        pendingDeletion: false,
+      })),
+    }],
+  };
+}
+
+/**
+ * Two grid spans joined by a highway, with the junction in the second span.
+ *
+ * The highway contributes a segment and no cells, so `segments` and `cells` fall out of
+ * index alignment from the crossing onward — which is the whole point of this route.
+ */
+function highwayRoute(id: string): RouteInput {
+  const centre = (gx: number) => ({ x: gx * TILE_SIZE + TILE_SIZE / 2, y: TILE_SIZE / 2 });
+  const cell = (gx: number, kind: SegmentKind) => ({
+    pos: { gx, gy: 0 }, kind, speedLimit: 40, pendingDeletion: false,
+  });
+  return {
+    id,
+    spans: [
+      { kind: 'grid', cells: [cell(1, R), cell(2, R)] },
+      { kind: 'highway', polyline: [centre(2), centre(6)], speedLimit: 80 },
+      { kind: 'grid', cells: [cell(6, R), cell(7, X), cell(8, R)] },
+    ],
+  };
+}
+
+function vehicle(
+  id: string, arc: number, speed = 0, mode: VehicleMode = VehicleMode.Driving,
+): Vehicle {
+  return {
+    id, routeId: 'r1', arcDistance: arc, speed, mode,
+    lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0,
+  };
+}
+
+function world(input: RouteInput, ...vehicles: Vehicle[]): TrafficWorld {
+  const w = createWorld();
+  const route = buildRoute(input);
+  expect(route).not.toBeNull();
+  w.routes.set(input.id, route!);
+  w.vehicles.push(...vehicles);
+  return w;
+}
+
+function indexed(w: TrafficWorld): LaneIndex {
+  const index = new LaneIndex();
+  index.rebuild(w);
+  return index;
+}
+
+/** Arc of the centre of the next junction cell strictly ahead, or null. */
+function junctionCentreAhead(route: Route, arc: number): number | null {
+  for (let i = 0; i < route.cells.length; i++) {
+    if (route.cellDist[i] <= arc) continue;
+    const seg = segmentAt(route, route.cellDist[i]);
+    if (seg !== null && seg.kind === SegmentKind.Intersection) return route.cellDist[i];
+  }
+  return null;
+}
+
+/**
+ * The rule this task replaces: two independently-tuned ramps combined with `Math.min`,
+ * scaling the speed limit. Returns a target speed in px/s.
+ *
+ * Faithful to `CarMovement.ts:126-131` — `followingSpeedMultiplier(gap)` is a ramp on the
+ * gap alone and `computeIntersectionYield` a ramp on distance to the junction centre,
+ * neither aware of the other, and neither able to name *what* it is slowing down for.
+ */
+function minOfTwoMultipliers(
+  w: TrafficWorld, v: Vehicle, index: LaneIndex, admitted: Set<string>,
+): number {
+  const route = w.routes.get(v.routeId)!;
+  const limit = speedLimitAt(route, v.arcDistance);
+
+  const leader = index.findLeader(w, v);
+  const gap = leader === null ? Infinity : leader.gap;
+  const followingMult = gap <= CAR_MIN_GAP ? 0
+    : gap >= CAR_COMFORT_GAP ? 1
+      : (gap - CAR_MIN_GAP) / (CAR_COMFORT_GAP - CAR_MIN_GAP);
+
+  let intersectionMult = 1;
+  if (!admitted.has(v.id)) {
+    const centre = junctionCentreAhead(route, v.arcDistance);
+    if (centre !== null) {
+      const d = centre - v.arcDistance;
+      intersectionMult = d <= INTERSECTION_STOP_DIST ? 0
+        : d >= INTERSECTION_DECEL_DIST ? 1
+          : (d - INTERSECTION_STOP_DIST) / (INTERSECTION_DECEL_DIST - INTERSECTION_STOP_DIST);
+    }
+  }
+
+  return limit * Math.min(followingMult, intersectionMult);
+}
+
+describe('junctionEntryArc', () => {
+  it('places the stop line half a tile before the junction centre', () => {
+    const route = buildRoute(road('r1', [R, R, X, R]))!;
+    // Straight route: cell centres sit one tile apart, so the junction centre is 2 tiles in.
+    expect(route.cellDist[2]).toBeCloseTo(2 * TILE_SIZE, 5);
+
+    const entry = junctionEntryArc(route, 2);
+    expect(entry).toBeCloseTo(2 * TILE_SIZE - TILE_SIZE / 2, 5);
+    // The stop line is the junction segment's own start: a car stopped there has not
+    // entered the cell at all.
+    expect(segmentAt(route, route.cellDist[2])!.kind).toBe(SegmentKind.Intersection);
+    expect(segmentAt(route, route.cellDist[2])!.startArc).toBeCloseTo(entry, 5);
+  });
+
+  it('clamps to the route start for the first cell', () => {
+    const route = buildRoute(road('r1', [X, R, R]))!;
+    expect(junctionEntryArc(route, 0)).toBeCloseTo(route.cellDist[0], 5);
+  });
+});
+
+describe('nearestConstraint', () => {
+  it('constrains an empty road only by its end', () => {
+    const w = world(road('r1', [R, R, R, R]), vehicle('a', 0));
+    const route = w.routes.get('r1')!;
+    expect(route.length).toBeCloseTo(3 * TILE_SIZE, 5);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set(['a']));
+    expect(c.arc).toBeCloseTo(3 * TILE_SIZE, 5);
+    expect(c.speed).toBe(0);
+  });
+
+  it('constrains by the rear bumper of a car ahead when one is nearer than the end', () => {
+    const w = world(road('r1', [R, R, R, R]), vehicle('a', 0), vehicle('b', 30, 10));
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set(['a']));
+    // Gaps are net: the point the follower must not pass is the leader's rear bumper,
+    // one car length behind its centre. Not the leader's centre, and not two lengths back.
+    expect(c.arc).toBeCloseTo(30 - CAR_LENGTH, 5);
+    expect(c.speed).toBeCloseTo(10, 5);
+  });
+
+  it('constrains by a parked car at zero speed', () => {
+    const w = world(
+      road('r1', [R, R, R, R]),
+      vehicle('a', 0),
+      vehicle('b', 30, 0, VehicleMode.Parked),
+    );
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set(['a']));
+    expect(c.arc).toBeCloseTo(30 - CAR_LENGTH, 5);
+    expect(c.speed).toBe(0);
+  });
+
+  it('reports an overlapping leader rather than dropping it', () => {
+    const overlap = CAR_LENGTH / 2;
+    const w = world(road('r1', [R, R, R, R]), vehicle('a', 0), vehicle('b', overlap, 5));
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set(['a']));
+    // A negative arc — the car the follower most needs to brake for. `idmAcceleration`
+    // floors the gap, so this becomes hard braking rather than a dropped constraint.
+    expect(c.arc).toBeCloseTo(overlap - CAR_LENGTH, 5);
+    expect(c.arc).toBeLessThan(0);
+    expect(c.speed).toBeCloseTo(5, 5);
+  });
+
+  it('stops at the junction boundary when not admitted', () => {
+    const w = world(road('r1', [R, R, X, R]), vehicle('a', 0));
+    const route = w.routes.get('r1')!;
+    const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
+    expect(route.length).toBeGreaterThan(boundary);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set());
+    expect(c.arc).toBeCloseTo(boundary, 5);
+    expect(c.speed).toBe(0);
+  });
+
+  it('does not stop at the junction when admitted', () => {
+    const w = world(road('r1', [R, R, X, R]), vehicle('a', 0));
+    const route = w.routes.get('r1')!;
+    const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set(['a']));
+    expect(c.arc).toBeCloseTo(route.length, 5);
+    expect(c.arc).toBeGreaterThan(boundary);
+  });
+
+  it('does not constrain an admitted car already past its own stop line', () => {
+    const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
+    const inside = boundary + TILE_SIZE / 4;
+    const w = world(road('r1', [R, R, X, R]), vehicle('a', inside, 20));
+    const route = w.routes.get('r1')!;
+    expect(isInsideJunction(route, inside)).toBe(true);
+
+    // Braking for a junction it has permission to cross would stop it in the box.
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set(['a']));
+    expect(c.arc).toBeCloseTo(route.length, 5);
+  });
+
+  it('keeps the nearest constraint when several apply', () => {
+    const w = world(
+      road('r1', [R, R, X, R]),
+      vehicle('a', 0),
+      vehicle('b', 30, 0, VehicleMode.Parked),
+    );
+    const parkedRear = 30 - CAR_LENGTH;
+    const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
+    const route = w.routes.get('r1')!;
+    // Premise: the parked car really is the nearest of the three candidates.
+    expect(parkedRear).toBeLessThan(boundary);
+    expect(boundary).toBeLessThan(route.length);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set());
+    expect(c.arc).toBeCloseTo(parkedRear, 5);
+  });
+
+  /**
+   * The other ordering, and the one a min of two multipliers gets wrong: the leader is
+   * already across the stop line, so the following ramp is relaxed while the junction ramp
+   * is engaged. Comparing the two ramps picks the leader; comparing arcs picks the line.
+   */
+  it('keeps the junction when it is nearer than the car ahead', () => {
+    const start = TILE_SIZE / 2;
+    const gap = TILE_SIZE * 1.125;
+    const w = world(
+      road('r1', [R, R, X, R]),
+      vehicle('a', start, 20),
+      vehicle('b', start + gap + CAR_LENGTH, 10),
+    );
+    const route = w.routes.get('r1')!;
+    const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
+    // Premise: the leader's rear bumper is beyond the stop line — it is in the box — and
+    // the stop line is still ahead of the follower.
+    expect(start + gap).toBeGreaterThan(boundary);
+    expect(boundary).toBeGreaterThan(start);
+    expect(isInsideJunction(route, w.vehicles[1].arcDistance)).toBe(true);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set());
+    expect(c.arc).toBeCloseTo(boundary, 5);
+    expect(c.speed).toBe(0);
+  });
+
+  it('ignores a junction the vehicle has already passed', () => {
+    const exitBoundary = 2 * TILE_SIZE + TILE_SIZE / 2;
+    const beyond = exitBoundary + TILE_SIZE / 4;
+    const w = world(road('r1', [R, R, X, R]), vehicle('a', beyond, 20));
+    const route = w.routes.get('r1')!;
+    expect(isInsideJunction(route, beyond)).toBe(false);
+    expect(beyond).toBeGreaterThan(route.cellDist[2]);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set());
+    expect(c.arc).toBeCloseTo(route.length, 5);
+  });
+
+  it('stops at the first of two junctions ahead', () => {
+    const w = world(road('r1', [R, X, R, X, R]), vehicle('a', 0));
+    const route = w.routes.get('r1')!;
+    expect(segmentAt(route, route.cellDist[1])!.kind).toBe(SegmentKind.Intersection);
+    expect(segmentAt(route, route.cellDist[3])!.kind).toBe(SegmentKind.Intersection);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set());
+    expect(c.arc).toBeCloseTo(TILE_SIZE - TILE_SIZE / 2, 5);
+  });
+
+  it('finds the junction by arc, not by cell index, across a highway', () => {
+    const w = world(highwayRoute('r1'), vehicle('a', 0));
+    const route = w.routes.get('r1')!;
+
+    // Premise: the highway span has knocked `segments` and `cells` out of alignment, so an
+    // index lookup reads a plain road where the junction cell is, and would find the
+    // junction one cell too late.
+    const junctionCell = 3;
+    expect(route.cells[junctionCell]).toEqual({ gx: 7, gy: 0 });
+    expect(route.segments[junctionCell].kind).toBe(SegmentKind.Road);
+    expect(segmentAt(route, route.cellDist[junctionCell])!.kind).toBe(SegmentKind.Intersection);
+
+    // Two grid cells, then four tiles of highway, then the junction one cell further on.
+    const centre = 6 * TILE_SIZE;
+    expect(route.cellDist[junctionCell]).toBeCloseTo(centre, 5);
+    const boundary = centre - TILE_SIZE / 2;
+    const wrongBoundary = junctionEntryArc(route, junctionCell + 1);
+    expect(wrongBoundary).toBeGreaterThan(boundary);
+
+    const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Set());
+    expect(c.arc).toBeCloseTo(boundary, 5);
+  });
+
+  it('holds a vehicle in place when its route is gone', () => {
+    const w = world(road('r1', [R, R, R, R]));
+    const stray: Vehicle = { ...vehicle('a', 25, 30), routeId: 'missing' };
+    w.vehicles.push(stray);
+
+    const c = nearestConstraint(w, stray, indexed(w), new Set(['a']));
+    expect(c.arc).toBeCloseTo(25, 5);
+    expect(c.speed).toBe(0);
+  });
+
+  /**
+   * The keystone. A constraint names an arc *and* a speed, so the headway model can be told
+   * "match the car ahead" — the thing a pair of multipliers cannot say. The reference below
+   * returns the identical target speed whether the leader is stopped dead or cruising at
+   * the follower's own speed, and the follower would brake in both cases or neither.
+   */
+  it('carries the leader speed, which a min of two multipliers cannot express', () => {
+    const limit = 60;
+    const followerSpeed = TILE_SIZE;
+    const gap = 50;
+    const leaderArc = gap + CAR_LENGTH;
+
+    const build = (leaderSpeed: number) => {
+      const w = world(
+        road('r1', [R, R, R, R], limit),
+        vehicle('a', 0, followerSpeed),
+        vehicle('b', leaderArc, leaderSpeed),
+      );
+      const index = indexed(w);
+      return {
+        w,
+        constraint: nearestConstraint(w, w.vehicles[0], index, new Set(['a'])),
+        old: minOfTwoMultipliers(w, w.vehicles[0], index, new Set(['a'])),
+      };
+    };
+
+    const matched = build(followerSpeed);
+    const stopped = build(0);
+
+    // Premise: in both worlds the leader is the governing constraint, at the same arc.
+    expect(matched.constraint.arc).toBeCloseTo(gap, 5);
+    expect(stopped.constraint.arc).toBeCloseTo(gap, 5);
+    expect(gap).toBeLessThan(matched.w.routes.get('r1')!.length);
+
+    // The old rule: same answer for both, and not vacuously zero.
+    expect(matched.old).toBeGreaterThan(0);
+    expect(matched.old).toBe(stopped.old);
+
+    // The new one: the speed of whatever is actually there.
+    expect(matched.constraint.speed).toBeCloseTo(followerSpeed, 5);
+    expect(stopped.constraint.speed).toBe(0);
+
+    const accel = (speed: number) =>
+      idmAcceleration(followerSpeed, limit, gap, speed, DEFAULT_IDM);
+    // And the consequence, at the one site where a deceleration is ever computed.
+    expect(accel(matched.constraint.speed)).toBeGreaterThan(0);
+    expect(accel(stopped.constraint.speed)).toBeLessThan(0);
+  });
+
+  /**
+   * The old intersection ramp measured to the junction *centre* and reached zero
+   * `INTERSECTION_STOP_DIST` short of it — a stop line inside the cell. This module's stop
+   * line is the cell boundary, so a car that has crossed it is already committed and must
+   * be carried by admission rather than braked.
+   */
+  it('stops at the junction boundary where the old ramp stopped inside the box', () => {
+    // Premise: the old ramp's zero point really did lie within the junction cell.
+    expect(INTERSECTION_STOP_DIST).toBeLessThan(TILE_SIZE / 2);
+
+    const centre = 2 * TILE_SIZE;
+    const boundary = centre - TILE_SIZE / 2;
+    const oldStopLine = centre - INTERSECTION_STOP_DIST;
+    const between = (boundary + oldStopLine) / 2;
+    expect(between).toBeGreaterThan(boundary);
+    expect(between).toBeLessThan(oldStopLine);
+    // Premise: the old ramp is engaged this close to the junction, not idling at 1.
+    expect(centre - between).toBeLessThan(INTERSECTION_DECEL_DIST);
+
+    const w = world(road('r1', [R, R, X, R]), vehicle('a', between, 20));
+    const index = indexed(w);
+    const notAdmitted = new Set<string>();
+
+    // The old rule still lets this car drive: it is past the boundary but short of the
+    // centre, so its multiplier has not reached zero.
+    expect(minOfTwoMultipliers(w, w.vehicles[0], index, notAdmitted)).toBeGreaterThan(0);
+
+    // This module put the stop line at the boundary, which the car is already past.
+    const c = nearestConstraint(w, w.vehicles[0], index, notAdmitted);
+    expect(c.arc).toBeCloseTo(boundary, 5);
+    expect(c.arc).toBeLessThan(between);
+    expect(c.speed).toBe(0);
+  });
+});
+
+describe('isInsideJunction', () => {
+  it('covers the junction cell and nothing either side of it', () => {
+    const route = buildRoute(road('r1', [R, R, X, R]))!;
+    expect(isInsideJunction(route, route.cellDist[1])).toBe(false);
+    expect(isInsideJunction(route, route.cellDist[2])).toBe(true);
+    expect(isInsideJunction(route, route.cellDist[3])).toBe(false);
+    // Just inside the entry boundary, and just outside the exit boundary.
+    expect(isInsideJunction(route, 2 * TILE_SIZE - TILE_SIZE / 2 + 0.5)).toBe(true);
+    expect(isInsideJunction(route, 2 * TILE_SIZE + TILE_SIZE / 2 + 0.5)).toBe(false);
+  });
+});
