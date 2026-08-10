@@ -1534,6 +1534,7 @@ import { LaneIndex } from './lanes';
 import { nearestConstraint } from './obstacles';
 import { SegmentKind, VehicleMode, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
+import { CAR_LENGTH } from '../constants';
 
 function road(id: string, kinds: SegmentKind[]): RouteInput {
   return {
@@ -1579,7 +1580,10 @@ describe('nearestConstraint', () => {
     const index = new LaneIndex();
     index.rebuild(w);
     const c = nearestConstraint(w, w.vehicles[0], index, new Set(['a']));
-    expect(c.arc).toBeCloseTo(30, 1);
+    // NET gap: the leader's centre is at 30, its rear bumper one car length nearer.
+    // Derived from CAR_LENGTH rather than written as 18, so a change to car size cannot
+    // quietly turn this into a value pin.
+    expect(c.arc).toBeCloseTo(30 - CAR_LENGTH, 1);
     expect(c.speed).toBeCloseTo(10, 5);
   });
 
@@ -1615,11 +1619,13 @@ describe('nearestConstraint', () => {
 
   it('keeps the nearest constraint when several apply', () => {
     const input = road('r1', [R, R, X, R]);
-    const w = world(input, vehicle('a', 0), vehicle('b', 12, 0, VehicleMode.Parked));
+    const w = world(input, vehicle('a', 0), vehicle('b', 24, 0, VehicleMode.Parked));
     const index = new LaneIndex();
     index.rebuild(w);
-    // The parked car at 12 is nearer than the junction boundary.
-    expect(nearestConstraint(w, w.vehicles[0], index, new Set()).arc).toBeCloseTo(12, 1);
+    // Parked centre at 24, rear bumper at 24 - CAR_LENGTH = 12 — still nearer than the
+    // junction boundary, so the parked car wins.
+    expect(nearestConstraint(w, w.vehicles[0], index, new Set()).arc)
+      .toBeCloseTo(24 - CAR_LENGTH, 1);
   });
 });
 ```
