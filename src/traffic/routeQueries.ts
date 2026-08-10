@@ -2,7 +2,36 @@ import type { GridPos, PixelPos } from '../types';
 import type { Route } from './types';
 
 /**
+ * The arc extent cell `i` occupies: from the midpoint with its predecessor to the midpoint
+ * with its successor, clamped to the route's ends.
+ *
+ * `cellDist` records where a cell's *centre* falls, but a car is inside a cell for the whole
+ * stretch between the midpoints either side of it. Testing an arc against centres would drop
+ * the cell a car is standing on the instant it passed the centre — and for the "cells ahead"
+ * query that means deleting road out from under a homebound car rather than marking it
+ * pending. Extents reproduce what the loops in `Game.tryRemoveRoad` did with `pathIndex`.
+ *
+ * Derived from `cellDist` alone, deliberately. `route.segments` is not index-aligned with
+ * `route.cells` — a highway span contributes one segment and no cells — so `segments[i]`
+ * describes the wrong stretch of any route carrying a highway. The consequence is that a
+ * highway stretches the two cells flanking it across its whole arc. That over-includes, and
+ * over-including is the safe direction for both callers.
+ */
+function cellStartArc(route: Route, i: number): number {
+  return i === 0 ? 0 : (route.cellDist[i - 1] + route.cellDist[i]) / 2;
+}
+
+function cellEndArc(route: Route, i: number): number {
+  return i === route.cells.length - 1
+    ? route.length
+    : (route.cellDist[i] + route.cellDist[i + 1]) / 2;
+}
+
+/**
  * The grid cells a route occupies between two arc distances, inclusive of both bounds.
+ *
+ * A cell counts when the arc it occupies overlaps the range at all, so a car sitting
+ * anywhere inside a cell keeps that cell in both its travelled and its remaining range.
  *
  * `Game.tryRemoveRoad` asks this to decide whether a road cell can be removed outright or
  * must be marked pending. The arc range encodes which part of the journey matters, and the
@@ -12,22 +41,26 @@ export function cellsBetween(route: Route, fromArc: number, toArc: number): Grid
   const out: GridPos[] = [];
   if (toArc < fromArc) return out;
   for (let i = 0; i < route.cells.length; i++) {
-    const d = route.cellDist[i];
-    if (d >= fromArc && d <= toArc) out.push(route.cells[i]);
+    if (cellStartArc(route, i) <= toArc && cellEndArc(route, i) >= fromArc) {
+      out.push(route.cells[i]);
+    }
   }
   return out;
 }
 
-/** Allocation-free equivalent of `cellsBetween(...).some(...)`, for the hover hot path. */
+/**
+ * Allocation-free equivalent of `cellsBetween(...).some(...)`, for when the caller only
+ * needs a yes or no — `carDependsOnCell`, which asks it once per car per road cell being
+ * removed.
+ */
 export function routeCoversCell(
   route: Route, gx: number, gy: number, fromArc: number, toArc: number,
 ): boolean {
   if (toArc < fromArc) return false;
   for (let i = 0; i < route.cells.length; i++) {
-    const d = route.cellDist[i];
-    if (d < fromArc || d > toArc) continue;
     const c = route.cells[i];
-    if (c.gx === gx && c.gy === gy) return true;
+    if (c.gx !== gx || c.gy !== gy) continue;
+    if (cellStartArc(route, i) <= toArc && cellEndArc(route, i) >= fromArc) return true;
   }
   return false;
 }
