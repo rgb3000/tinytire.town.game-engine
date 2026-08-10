@@ -1022,6 +1022,7 @@ Expected: FAIL — `Failed to resolve import "./lanes"`.
 ```ts
 import { Direction } from '../types';
 import { getDirection } from '../utils/direction';
+import { CAR_LENGTH } from '../constants';
 import { LEADER_SCAN_EDGES } from './tuning';
 import type { Route, TrafficWorld, Vehicle } from './types';
 
@@ -1074,7 +1075,20 @@ interface LaneOccupant {
 
 export interface LeaderInfo {
   id: string;
-  /** Distance along the follower's own route to the leader, in px. */
+  /**
+   * **Net** gap: clear distance along the follower's own route to the leader's rear
+   * bumper, in pixels. One car length is already subtracted here, so no consumer has to
+   * remember to do it — which is the whole point. The no-overlap invariant is therefore
+   * `gap >= 0`, a statement that cannot be mis-set, rather than `gap >= CAR_LENGTH`,
+   * which every consumer would have to reproduce correctly and independently.
+   *
+   * This is also the convention the Intelligent Driver Model is defined on: Treiber's
+   * `s0` is the jam distance between bumpers, so `DEFAULT_IDM.s0` means what the
+   * literature says it means.
+   *
+   * May be negative if two cars ever overlap; `idmAcceleration`'s floor turns that into
+   * hard braking rather than a division blow-up.
+   */
   gap: number;
   speed: number;
 }
@@ -1149,8 +1163,14 @@ export class LaneIndex {
       for (const o of occupants) {
         if (o.vehicleId === vehicle.id) continue;
         const theirArc = edgeStart + o.offset;
-        const gap = theirArc - vehicle.arcDistance;
-        if (gap <= 0) continue;
+        // "Ahead" is decided by arc order; the gap reported is NET — clear distance to
+        // the leader's rear bumper. It may go negative if geometry ever lets two cars
+        // overlap, and the headway model's floor turns that into hard braking. Deciding
+        // ahead-ness on the raw difference keeps an overlapping leader visible instead
+        // of silently dropping the one car that most needs braking for.
+        const rawAhead = theirArc - vehicle.arcDistance;
+        if (rawAhead <= 0) continue;
+        const gap = rawAhead - CAR_LENGTH;
         if (best === null || gap < best.gap) {
           best = { id: o.vehicleId, gap, speed: o.speed };
         }
@@ -1735,7 +1755,7 @@ import { step } from './step';
 import { SegmentKind, VehicleMode, TrafficEventKind, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
 import { DEFAULT_IDM } from './tuning';
-import { TILE_SIZE } from '../constants';
+import { CAR_LENGTH, TILE_SIZE } from '../constants';
 
 const DT = 1 / 60;
 const R = SegmentKind.Road;
@@ -1797,10 +1817,14 @@ describe('step', () => {
     for (let i = 0; i < 1200; i++) {
       step(w, DT);
       const gap = w.vehicles[1].arcDistance - w.vehicles[0].arcDistance;
-      expect(gap).toBeGreaterThan(0);
+      expect(gap).toBeGreaterThan(CAR_LENGTH);
     }
+    // Arc difference is centre-to-centre; the NET gap the model controls is that minus
+    // one car length. At rest the follower settles at s0 of clear bumper space, so the
+    // centre spacing is CAR_LENGTH + s0. The 0.9 absorbs 60Hz Euler undershoot, which
+    // settles a couple of percent short.
     const finalGap = w.vehicles[1].arcDistance - w.vehicles[0].arcDistance;
-    expect(finalGap).toBeGreaterThanOrEqual(DEFAULT_IDM.s0 * 0.9);
+    expect(finalGap).toBeGreaterThanOrEqual(CAR_LENGTH + DEFAULT_IDM.s0 * 0.9);
   });
 
   it('does not let a car jump more than its speed allows in one tick', () => {
@@ -2040,6 +2064,7 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     // correcting, so model drift surfaces as a failure instead of a visual glitch.
     const leader = laneIndex.findLeader(world, v);
     if (leader !== null) {
+      // leader.gap is net, so this resolves to (leader's rear bumper - s0).
       const ceiling = before + leader.gap - DEFAULT_IDM.s0;
       if (v.arcDistance > ceiling) {
         if (CAR_DEBUG) {
@@ -2138,7 +2163,7 @@ import { step } from './step';
 import { SegmentKind, VehicleMode, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
 import { DEFAULT_IDM } from './tuning';
-import { TILE_SIZE } from '../constants';
+import { CAR_LENGTH, TILE_SIZE } from '../constants';
 
 const DT = 1 / 60;
 const SPEED_LIMIT = 40;
@@ -2198,7 +2223,9 @@ describe('traffic invariants', () => {
           // Cars stack up at the route end once they arrive; ignore the terminal cluster.
           if (arcs[i] >= world.routes.get('r1')!.length - 1e-6) continue;
           expect(arcs[i] - arcs[i - 1], `seed ${seed} tick ${tick}`)
-            .toBeGreaterThan(DEFAULT_IDM.s0 * 0.5);
+            // Net-gap convention: cars do not overlap iff their centres are more than
+            // one car length apart. This is the physical invariant, not a tuning value.
+            .toBeGreaterThan(CAR_LENGTH);
         }
       }
     }
@@ -2284,7 +2311,7 @@ describe('traffic invariants', () => {
         if (v.id === world.vehicles[0].id) continue;
         // Nobody may occupy the parked car's space.
         if (v.arcDistance < parkedArc) {
-          expect(parkedArc - v.arcDistance).toBeGreaterThan(DEFAULT_IDM.s0 * 0.5);
+          expect(parkedArc - v.arcDistance).toBeGreaterThan(CAR_LENGTH);
         }
       }
     }
