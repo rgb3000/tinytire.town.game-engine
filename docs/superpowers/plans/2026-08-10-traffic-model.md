@@ -1470,7 +1470,14 @@ export function admit(candidates: JunctionCandidate[]): Set<string> {
     const rx = yieldRank(x, candidates);
     const ry = yieldRank(y, candidates);
     if (rx !== ry) return rx - ry;
-    if (x.arrivalTime !== y.arrivalTime) return x.arrivalTime - y.arrivalTime;
+    // `arrivalTime` is 0 while a vehicle is still rolling. Comparing that raw would sort
+    // "has not arrived yet" as "arrived at the beginning of time", so a car approaching
+    // at speed would outrank one queued for a minute — and any cross stream whose
+    // headway is shorter than a waiter's approach travel time would starve it forever.
+    // Measured at 53.9s and counting before this was corrected.
+    const ax = x.arrivalTime === 0 ? Infinity : x.arrivalTime;
+    const ay = y.arrivalTime === 0 ? Infinity : y.arrivalTime;
+    if (ax !== ay) return ax - ay;
     return x.vehicleId < y.vehicleId ? -1 : x.vehicleId > y.vehicleId ? 1 : 0;
   });
 
