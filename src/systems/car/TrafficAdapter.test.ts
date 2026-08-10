@@ -952,3 +952,69 @@ describe('TrafficAdapter watchdog reset', () => {
     expect(blockedAfter).toBe(0);
   });
 });
+
+describe('TrafficAdapter mirrors', () => {
+  it('mirrors the simulated speed onto the car for the debug overlay', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 8);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(8), false);
+    for (let i = 0; i < 60; i++) adapter.update(DT);
+    adapter.writeBack([car]);
+
+    expect(adapter.getSpeed(car)).toBeGreaterThan(0);
+    expect(car.currentSpeed).toBe(adapter.getSpeed(car));
+  });
+});
+
+describe('TrafficAdapter refusals', () => {
+  it('folds a lone leading cell into the crossing that follows it', () => {
+    // The mirror of the trailing case: an origin sitting at a highway entrance. Synthetic
+    // for the same reason — the pathfinder puts the crossing's own endpoint there, where
+    // the polyline already starts and folding cannot be told from dropping.
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    for (const gx of [1, 2, 10, 11]) roads.placeRoad(gx, 0);
+    roads.connectRoads(10, 0, 11, 0);
+    grid.recomputeIntersectionFlags();
+    const highways = new HighwaySystem();
+    const { cp1, cp2 } = defaultControlPoints({ gx: 2, gy: 0 }, { gx: 10, gy: 0 });
+    const hw = highways.addHighway({ gx: 2, gy: 0 }, { gx: 10, gy: 0 }, cp1, cp2);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, highways);
+
+    const car = makeCar();
+    expect(adapter.installRoute(car, [
+      { kind: 'grid', pos: { gx: 1, gy: 0 } },
+      { kind: 'highway', highwayId: hw.id, from: { gx: 2, gy: 0 }, to: { gx: 10, gy: 0 } },
+      ...rowPath(10, 11, 0),
+    ], false)).toBe(true);
+
+    const route = adapter.getRouteFor(car)!;
+    expect(route.points[0].x).toBeLessThan(2 * TILE);
+  });
+
+  it('refuses a route rather than splicing across a crossing it cannot resolve', () => {
+    // Dropping the crossing leaves its two neighbours to be joined directly. Usually the
+    // gap is wider than the joint tolerance and `buildRoute` rejects it anyway — but two
+    // spans meeting at right angles sit 35.5px apart, inside the one-tile tolerance, so the
+    // splice is accepted and the car drives a straight line across whatever the highway was
+    // built to cross. Refusing at the source is what makes that unreachable.
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    for (const pos of [[1, 0], [2, 0], [3, 0], [3, 1]]) roads.placeRoad(pos[0], pos[1]);
+    roads.connectRoads(1, 0, 2, 0);
+    roads.connectRoads(3, 0, 3, 1);
+    grid.recomputeIntersectionFlags();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, new HighwaySystem());
+
+    const path: PathStep[] = [
+      { kind: 'grid', pos: { gx: 1, gy: 0 } },
+      { kind: 'grid', pos: { gx: 2, gy: 0 } },
+      { kind: 'highway', highwayId: 'removed-while-the-car-was-on-it', from: { gx: 2, gy: 0 }, to: { gx: 3, gy: 0 } },
+      { kind: 'grid', pos: { gx: 3, gy: 0 } },
+      { kind: 'grid', pos: { gx: 3, gy: 1 } },
+    ];
+    expect(adapter.installRoute(makeCar(), path, false)).toBe(false);
+  });
+});
