@@ -725,8 +725,18 @@ describe('idmAcceleration', () => {
     }
   });
 
-  it('does not brake for a leader moving away at the same speed with a comfortable gap', () => {
-    expect(idmAcceleration(40, 40, 200, 40, P)).toBeGreaterThan(-1e-6);
+  it('barely brakes for a leader holding station at a comfortable gap', () => {
+    // At v === v0 the free-road term is exactly zero while the interaction term never is,
+    // so standard IDM always eases off slightly for any finite gap: here s* = 38,
+    // (38/200)^2 = 0.0361, acc = -1.444. Asserting >= 0 would require a
+    // "leader no faster than me" guard, which is a deviation from IDM, not a fix.
+    const acc = idmAcceleration(40, 40, 200, 40, P);
+    expect(acc).toBeLessThan(0);
+    expect(Math.abs(acc)).toBeLessThan(P.b * 0.05);
+  });
+
+  it('accelerates toward a leader holding station when below the speed limit', () => {
+    expect(idmAcceleration(20, 40, 200, 40, P)).toBeGreaterThan(0);
   });
 
   it('holds station at rest behind a stopped leader at the minimum gap', () => {
