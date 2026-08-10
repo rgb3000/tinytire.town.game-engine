@@ -1,3 +1,4 @@
+import { CAR_LENGTH } from '../constants';
 import { Direction } from '../types';
 import { getDirection } from '../utils/direction';
 import { LEADER_SCAN_EDGES } from './tuning';
@@ -69,7 +70,19 @@ interface LaneOccupant {
 
 export interface LeaderInfo {
   id: string;
-  /** Distance along the follower's own route to the leader, in px. */
+  /**
+   * Clear distance along the follower's own route to the leader's rear bumper, in px.
+   *
+   * Net, not centre-to-centre: one `CAR_LENGTH` is already subtracted here, so no consumer
+   * repeats it. That makes the no-overlap invariant `gap >= 0` — a single condition that
+   * cannot be mis-set — rather than `gap >= CAR_LENGTH`, a correction the stepper, the
+   * collision sweep and every debug overlay would each have to reproduce independently.
+   * It also restores IDM's own definition, where `s0` is the jam distance between bumpers.
+   *
+   * **May be negative** when vehicles genuinely overlap. Such a leader is reported rather
+   * than filtered, because it is the one that most needs braking for; `idmAcceleration`
+   * floors the gap at `1e-3`, which turns a negative gap into hard braking.
+   */
   gap: number;
   speed: number;
 }
@@ -151,10 +164,19 @@ export class LaneIndex {
       let best: LeaderInfo | null = null;
 
       for (const o of occupants) {
+        // Kept explicit rather than left to the sign test below. `edgeStart + offset`
+        // reconstructs the vehicle's own arc and is exact for every spacing the board
+        // produces, but a net gap makes the failure mode expensive if it ever were not:
+        // a sub-ulp positive difference would report the vehicle as its own leader a full
+        // car length inside itself, and it would brake to a permanent stop.
         if (o.vehicleId === vehicle.id) continue;
         const theirArc = edgeStart + o.offset;
-        const gap = theirArc - vehicle.arcDistance;
-        if (gap <= 0) continue;
+        // Ahead-ness is decided on the raw centre-to-centre difference, before the car
+        // length comes off. Testing the net gap instead would drop an overlapping leader —
+        // the single vehicle a follower most needs to brake for — as if it were behind.
+        const rawAhead = theirArc - vehicle.arcDistance;
+        if (rawAhead <= 0) continue;
+        const gap = rawAhead - CAR_LENGTH;
         if (best === null || gap < best.gap) {
           best = { id: o.vehicleId, gap, speed: o.speed };
         }

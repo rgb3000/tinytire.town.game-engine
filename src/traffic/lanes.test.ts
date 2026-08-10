@@ -17,7 +17,7 @@ import { laneKey, edgeIndexAt, LaneIndex } from './lanes';
 import { SegmentKind, VehicleMode, createWorld } from './types';
 import type { Route, RouteCellInput, RouteInput, RouteSpan, TrafficWorld, Vehicle } from './types';
 import { Direction } from '../types';
-import { TILE_SIZE } from '../constants';
+import { CAR_LENGTH, GRID_COLS, GRID_ROWS, TILE_SIZE } from '../constants';
 import { LEADER_SCAN_EDGES } from './tuning';
 
 function roadCells(positions: { gx: number; gy: number }[]): RouteCellInput[] {
@@ -54,6 +54,12 @@ function alongRow(id: string, from: number, to: number): RouteInput {
 const centreX = (gx: number): number => gx * TILE_SIZE + TILE_SIZE / 2;
 /** Arc distance of the `i`th cell of an unsmoothed straight run. */
 const arcOfCell = (i: number): number => i * TILE_SIZE;
+/**
+ * The clear (bumper-to-bumper) gap the index should report for a given centre-to-centre
+ * spacing. `LeaderInfo.gap` is net: one car length is deducted there so that no consumer
+ * has to, which makes the no-overlap invariant `gap >= 0` instead of `gap >= CAR_LENGTH`.
+ */
+const clearGap = (centreSpacing: number): number => centreSpacing - CAR_LENGTH;
 
 /** A straight eastbound highway polyline along the tile centre line. */
 function highwaySpan(fromX: number, toX: number): RouteSpan {
@@ -163,10 +169,12 @@ describe('laneKey', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('gives every cell of a small grid, in every direction, a distinct key', () => {
+  it('gives every cell of the whole grid, in every direction, a distinct key', () => {
+    // The full board, not a corner of it: a narrower sweep stays injective under a packing
+    // that reserves too few bits for gy, because small gx never collides with it.
     const keys: number[] = [];
-    for (let gx = 0; gx < 12; gx++) {
-      for (let gy = 0; gy < 12; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      for (let gy = 0; gy < GRID_ROWS; gy++) {
         for (const dir of Object.values(Direction)) keys.push(laneKey(gx, gy, dir));
       }
     }
@@ -213,7 +221,7 @@ describe('LaneIndex.findLeader', () => {
 
     const leader = indexed(world).findLeader(world, me);
     expect(leader?.id).toBe('b');
-    expect(leader?.gap).toBeCloseTo(25, 1);
+    expect(leader?.gap).toBeCloseTo(clearGap(25), 1);
   });
 
   it('ignores a car behind', () => {
@@ -275,6 +283,41 @@ describe('LaneIndex.findLeader', () => {
     const world = worldWith(me, ahead);
 
     expect(indexed(world).findLeader(world, me)?.speed).toBeCloseTo(22, 5);
+  });
+
+  it('deducts exactly one car length from the centre-to-centre spacing', () => {
+    // Two cars two tiles apart, centre to centre, have two tiles of road between their
+    // centres and one car length less than that between their bumpers.
+    const me = vehicle('a', 'r1', 0);
+    const ahead = vehicle('b', 'r1', arcOfCell(2));
+    const world = worldWith(me, ahead);
+
+    const leader = indexed(world).findLeader(world, me);
+    expect(leader?.gap).toBeCloseTo(2 * TILE_SIZE - CAR_LENGTH, 5);
+  });
+
+  it('reports an overlapping leader with a negative gap instead of dropping it', () => {
+    // Closer than a car length is a car partly inside another. Filtering on the *net* gap
+    // would discard exactly the vehicle a follower most needs to brake for; IDM floors the
+    // gap at 1e-3, so a negative value becomes hard braking, which is what we want.
+    const me = vehicle('a', 'r1', 0);
+    const ahead = vehicle('b', 'r1', 5);
+    const world = worldWith(me, ahead);
+
+    const leader = indexed(world).findLeader(world, me);
+    expect(leader?.id).toBe('b');
+    expect(leader?.gap).toBeLessThan(0);
+    expect(leader?.gap).toBeCloseTo(clearGap(5), 5);
+  });
+
+  it('still ignores a car behind even though a near one would net out negative', () => {
+    // Ahead-ness is decided before the car length comes off, so a car 5px *behind* is
+    // behind — not a leader with a negative gap.
+    const me = vehicle('a', 'r1', 40);
+    const behind = vehicle('b', 'r1', 35);
+    const world = worldWith(me, behind);
+
+    expect(indexed(world).findLeader(world, me)).toBeNull();
   });
 
   it('returns null for a vehicle whose route the world does not have', () => {
@@ -344,7 +387,7 @@ describe('LaneIndex gaps around a corner', () => {
 
     const leader = indexed(world).findLeader(world, me);
     expect(leader?.id).toBe('b');
-    expect(leader?.gap).toBeCloseTo(AHEAD_ARC - ME_ARC, 5);
+    expect(leader?.gap).toBeCloseTo(clearGap(AHEAD_ARC - ME_ARC), 5);
   });
 
   it('reports a gap larger than the straight-line distance across the bend', () => {
@@ -358,9 +401,13 @@ describe('LaneIndex gaps around a corner', () => {
     const chord = Math.hypot(there.x - here.x, there.y - here.y);
 
     const gap = indexed(world).findLeader(world, me)!.gap;
+    // The chord is a centre-to-centre measure, so compare it against the centre-to-centre
+    // distance the index implies — adding back the car length it deducted — rather than
+    // against the net gap. Comparing the two conventions directly would be meaningless.
+    const alongRoute = gap + CAR_LENGTH;
     // The bend is real: the chord cuts the corner by more than a tenth of the distance.
-    expect(chord).toBeLessThan(gap * 0.9);
-    expect(gap).toBeCloseTo(AHEAD_ARC - ME_ARC, 5);
+    expect(chord).toBeLessThan(alongRoute * 0.9);
+    expect(alongRoute).toBeCloseTo(AHEAD_ARC - ME_ARC, 5);
   });
 });
 
@@ -376,7 +423,7 @@ describe('LaneIndex across routes', () => {
 
     const leader = indexed(world).findLeader(world, me);
     expect(leader?.id).toBe('b');
-    expect(leader?.gap).toBeCloseTo(20, 1);
+    expect(leader?.gap).toBeCloseTo(clearGap(20), 1);
   });
 
   it('does not see a car on the same cells travelling the other way', () => {
@@ -431,7 +478,7 @@ describe('LaneIndex on a highway', () => {
 
     const leader = indexed(world).findLeader(world, me);
     expect(leader?.id).toBe('b');
-    expect(leader?.gap).toBeCloseTo(50, 5);
+    expect(leader?.gap).toBeCloseTo(clearGap(50), 5);
     expect(leader?.speed).toBeCloseTo(30, 5);
   });
 
@@ -453,7 +500,7 @@ describe('LaneIndex on a highway', () => {
 
     const leader = indexed(world).findLeader(world, me);
     expect(leader?.id).toBe('b');
-    expect(leader?.gap).toBeCloseTo(80, 5);
+    expect(leader?.gap).toBeCloseTo(clearGap(80), 5);
   });
 
   it('ignores a car on the highway that is behind', () => {
@@ -472,11 +519,11 @@ describe('LaneIndex.rebuild', () => {
     const world = worldWith(me, ahead);
     const index = new LaneIndex();
     index.rebuild(world);
-    expect(index.findLeader(world, me)?.gap).toBeCloseTo(30, 1);
+    expect(index.findLeader(world, me)?.gap).toBeCloseTo(clearGap(30), 1);
 
     ahead.arcDistance = 60;
     index.rebuild(world);
-    expect(index.findLeader(world, me)?.gap).toBeCloseTo(60, 1);
+    expect(index.findLeader(world, me)?.gap).toBeCloseTo(clearGap(60), 1);
   });
 
   it('drops vehicles that have left the world', () => {

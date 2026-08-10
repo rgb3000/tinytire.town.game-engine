@@ -229,8 +229,13 @@ describe('idmAcceleration under 60Hz integration', () => {
       for (const startGap of [TILE_SIZE * 2, TILE_SIZE * 5, TILE_SIZE * 20]) {
         expect(startGap).toBeGreaterThan(stoppable);
         const { v, minGap, maxStep } = approachStoppedObstacle(desiredSpeed, startGap);
-        // Never overlaps: the gap stays clear of the leader's bumper by a car length.
-        expect(minGap).toBeGreaterThan(CAR_LENGTH);
+        // Never overlaps. `gap` here is the net, bumper-to-bumper distance the lane index
+        // reports and the model controls, so zero is contact and the whole no-overlap
+        // invariant is a single sign test — no car length to subtract or forget.
+        expect(minGap).toBeGreaterThan(0);
+        // Stronger: it does not dive inside the standstill gap and climb back out. The
+        // closest it ever comes is the gap it settles at.
+        expect(minGap).toBeGreaterThan(P.s0 * 0.95);
         // Comes to rest rather than creeping.
         expect(v).toBeLessThan(STOPPED_SPEED);
         // No tick teleports the car: a frame's travel never exceeds a frame at the limit,
@@ -250,8 +255,14 @@ describe('idmAcceleration under 60Hz integration', () => {
 });
 
 describe('tuning constants', () => {
-  it('keeps a standstill gap longer than a car', () => {
-    expect(P.s0).toBeGreaterThan(CAR_LENGTH);
+  it('keeps a stopped queue to less than one tile per car', () => {
+    // `s0` is now the clear space between bumpers, as in Treiber's own formulation, so
+    // comparing it to a car length says nothing. What it has to satisfy is a property of
+    // the board: a stopped car occupies `CAR_LENGTH + s0` of centre-to-centre spacing, and
+    // if that exceeded a tile a queue could not form along a road at all — every waiting
+    // car would reach back past the cell behind it.
+    expect(P.s0).toBeGreaterThan(0);
+    expect(CAR_LENGTH + P.s0).toBeLessThan(TILE_SIZE);
   });
 
   it('reserves harder braking for emergencies than for comfort', () => {
