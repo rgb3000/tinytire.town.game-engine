@@ -43,6 +43,10 @@ function cellEndArc(route: Route, i: number): number {
  * `obstacles.ts` exactly — `segments` and `cells` are not index-aligned, since a highway
  * span contributes a segment and no cells. Both functions must agree about which cells are
  * junctions or a car can be handed a stop line for a junction it is never offered to.
+ *
+ * Distinct from the exported `isInsideJunction`, which asks the narrower question "is this
+ * arc in intersection terrain" straight off the segment. That one cannot drive admission;
+ * the note on it in `obstacles.ts` explains why.
  */
 function insideJunctionCell(route: Route, arc: number): number {
   for (let i = 0; i < route.cells.length; i++) {
@@ -114,12 +118,29 @@ function buildJunctionCandidates(world: TrafficWorld): {
     const junction = route.cells[cellIndex];
     const before = route.cells[cellIndex - 1];
     const after = route.cells[cellIndex + 1];
-    if (before === undefined || after === undefined) return;
+    // No predecessor means the route *begins* inside the junction, so there is no approach
+    // to yield on and no entry direction to describe one with. `nextJunctionCell` looks
+    // strictly ahead and so imposes no stop line there either: the vehicle crosses
+    // unregulated, which is a gap, but a consistent one that cannot strand anybody.
+    if (before === undefined) return;
+
+    const entry = getDirection(before, junction);
+    // A route that *ends* in a junction cell has no exit cell — but skipping the candidate
+    // strands the vehicle for ever: `nextJunctionCell` still imposes the stop line, and with
+    // no candidate no admission can ever arrive to lift it. Measured on `[R,R,R,X]`, the car
+    // parked at arc 86.28 and never arrived in 3000 ticks.
+    //
+    // So it is offered with a straight-through maneuver instead. The vehicle actually stops
+    // at the cell centre, so the full-width chord over-reserves rather than under-reserves:
+    // it may yield to a crossing stream it would not quite have met, and can never fail to
+    // yield to one it would. Conservative in the safe direction, and it lets the vehicle be
+    // admitted and arrive.
+    const exit = after !== undefined ? getDirection(junction, after) : entry;
 
     const candidate: JunctionCandidate = {
       vehicleId: v.id,
-      entry: getDirection(before, junction),
-      exit: getDirection(junction, after),
+      entry,
+      exit,
       inside,
       arrivalTime: v.arrivalTime,
       exitHasRoom: exitHasRoom(world, route, cellIndex),
@@ -162,6 +183,12 @@ function buildJunctionCandidates(world: TrafficWorld): {
  * ever arrives. Half a tile is the arc at which the vehicle enters the destination cell,
  * which is what "arrived" means to the adapter, and it is derived from the grid rather than
  * from an IDM tuning value that a later pass may move.
+ *
+ * It does still carry one dependency on tuning, in the other direction: it must stay **wider
+ * than the distance the model parks short of the destination**, which is `s0`. Raise `s0`
+ * past half a tile and no vehicle would ever arrive again — the exact failure this constant
+ * exists to fix. `parks closer to the route end than the arrival threshold` in
+ * `step.test.ts` pins that, behaviourally rather than by restating the inequality.
  */
 const ARRIVAL_SLACK = TILE_SIZE / 2;
 
@@ -306,6 +333,13 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     v.distanceThisTick = v.arcDistance - before;
     // An edge rather than a level: `arcDistance` never decreases, so a vehicle crosses the
     // arrival arc exactly once however many ticks it then spends sitting on the far side.
+    //
+    // The `route.length / 2` floor keeps the arrival arc strictly inside the route, and in
+    // its far half, however short the route is. A grid span is at least two cells and so at
+    // least a tile long, but a highway span carries an arbitrary polyline: on a 30px route a
+    // flat half-tile threshold would fire at arc 10, nearer the origin than the destination,
+    // and at 20px or less it would land at or behind zero, where the edge test can never
+    // fire at all.
     const arrivalArc = route.length - Math.min(ARRIVAL_SLACK, route.length / 2);
     if (v.arcDistance >= arrivalArc && before < arrivalArc) {
       events.push({ kind: TrafficEventKind.Arrived, vehicleId: v.id });

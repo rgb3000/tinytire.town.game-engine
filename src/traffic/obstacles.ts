@@ -115,7 +115,27 @@ export function nearestConstraint(
   return best;
 }
 
-/** Whether the vehicle currently sits inside a junction cell. */
+/**
+ * Whether the vehicle currently sits inside a junction cell, by **segment**.
+ *
+ * Not the definition the stepper admits on, and the difference is deliberate rather than
+ * accidental. `insideJunctionCell` in `step.ts` takes the cell's extent from `cellDist`
+ * midpoints and the cell's kind from the segment at its *centre*; this takes both from the
+ * segment at the arc itself. The two agree on every route of a single grid span and diverge
+ * where a junction cell is the joint between two spans, which keeps a half-segment from each
+ * side: this function covers the whole cell, `insideJunctionCell` covers it via the midpoint
+ * extent, and reading the extent off the first half-segment — the obvious third option —
+ * covers only half of it.
+ *
+ * The stepper cannot use this one, because it must agree with `nextJunctionCell` above about
+ * *which cells are junctions at all*. On a junction cell opening a grid span after a highway
+ * span, `nextJunctionCell` finds no junction and imposes no stop line while this function
+ * reports `true` — a reservation with no stop line, which is worse than the unregulated
+ * crossing the two get by agreeing.
+ *
+ * So this stays a segment-level predicate for tests and diagnostics: it answers "is this arc
+ * in intersection terrain", not "which junction must admit this vehicle".
+ */
 export function isInsideJunction(route: Route, arc: number): boolean {
   const seg = segmentAt(route, arc);
   return seg !== null && seg.kind === SegmentKind.Intersection;

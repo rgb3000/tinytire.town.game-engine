@@ -173,7 +173,7 @@ describe('step', () => {
     }
   });
 
-  it('emits an arrival event when a car reaches the end', () => {
+  it('emits an arrival event when a car reaches its destination cell', () => {
     const w = world(4, vehicle('a', 0, 40));
     let arrived = false;
     for (let i = 0; i < 600 && !arrived; i++) {
@@ -228,8 +228,100 @@ describe('step', () => {
 
   it('stops at the end of the route rather than running past it', () => {
     const w = world(4, vehicle('a', 0, 40));
+    const route = w.routes.get('r1')!;
     for (let i = 0; i < 1200; i++) step(w, DT);
-    expect(w.vehicles[0].arcDistance).toBeLessThanOrEqual(w.routes.get('r1')!.length + 1e-6);
+    expect(w.vehicles[0].arcDistance).toBeLessThanOrEqual(route.length + 1e-6);
+    // Bounded below too. The upper bound alone is satisfied by the `Math.min(…, length)`
+    // write on its own, so a stepper that never moved a car would pass it.
+    expect(w.vehicles[0].arcDistance).toBeGreaterThan(route.length - TILE_SIZE);
+  });
+
+  it('parks closer to the route end than the arrival threshold, which is what makes arrival reachable', () => {
+    // `ARRIVAL_SLACK` is half a tile, and the destination is a stop line the headway model
+    // parks `s0` short of. Arrival is only reachable while that shortfall stays inside the
+    // slack — raise `s0` past half a tile and no vehicle in the game would ever arrive.
+    // Asserted on the measured resting position rather than by restating the inequality.
+    const w = world(8, vehicle('a', 0, 40));
+    for (let i = 0; i < 1200; i++) step(w, DT);
+
+    const shortfall = w.routes.get('r1')!.length - w.vehicles[0].arcDistance;
+    expect(shortfall).toBeGreaterThan(0);              // it really does park short of the end
+    expect(shortfall).toBeLessThan(TILE_SIZE / 2);     // ...but inside the arrival slack
+  });
+
+  it('scales the arrival threshold down on a route shorter than two slacks', () => {
+    // The `route.length / 2` floor. A grid span is at least two cells and so at least a tile
+    // long, but a highway span carries an arbitrary polyline. On a route under two slacks a
+    // flat half-tile threshold sits nearer the origin than the destination — on a 30px route
+    // it would fire at arc 10 — so the floor keeps "arrived" in the far half whatever the
+    // length, and keeps the arrival arc strictly inside the route.
+    const w = createWorld();
+    const short = buildRoute({
+      id: 'r1',
+      spans: [{ kind: 'highway', polyline: [{ x: 0, y: 0 }, { x: 30, y: 0 }], speedLimit: 40 }],
+    })!;
+    // Premise: the route really is in the band where the floor binds.
+    expect(short.length).toBeCloseTo(30, 6);
+    expect(short.length).toBeLessThan(2 * TILE_SIZE / 2);
+    w.routes.set('r1', short);
+    w.vehicles.push(vehicle('a', 0, 40));
+
+    let arrivals = 0;
+    let arcAtArrival = -1;
+    for (let i = 0; i < 600; i++) {
+      const n = step(w, DT).filter(e => e.kind === TrafficEventKind.Arrived).length;
+      if (n > 0) arcAtArrival = w.vehicles[0].arcDistance;
+      arrivals += n;
+    }
+    expect(arrivals).toBe(1);
+    expect(arcAtArrival).toBeGreaterThanOrEqual(short.length / 2);
+  });
+
+  it('gets a car whose route ends in a junction cell through it and out', () => {
+    // A terminal junction has no exit cell. Skipping the candidate for want of an exit
+    // maneuver strands the vehicle for ever: `nextJunctionCell` still imposes the stop line,
+    // and with no candidate no admission can arrive to lift it. Measured before the fix, the
+    // car parked at arc 86.28 and never arrived in 3000 ticks.
+    const w = createWorld();
+    addRoute(w, span('ends', [[0, 0, R], [1, 0, R], [2, 0, R], [3, 0, X]]));
+    const route = w.routes.get('ends')!;
+
+    // Premises: the last cell really is the junction, and really is last.
+    expect(route.cells.length).toBe(4);
+    expect(segmentAt(route, route.cellDist[3])!.kind).toBe(SegmentKind.Intersection);
+
+    w.vehicles.push(car('a', 'ends', 0, 40));
+    const arrived = run(w, 900);
+
+    expect(arrived.has('a')).toBe(true);
+    // And it got there, rather than tripping the event from behind the stop line at 100.
+    expect(find(w, 'a').arcDistance).toBeGreaterThan(100);
+  });
+
+  it('still makes a car entering a terminal junction yield to crossing traffic', () => {
+    // The straight-through maneuver the terminal case is offered with is what keeps it
+    // regulated. Waving it through unadmitted would fix the stall by removing the junction.
+    const w = createWorld();
+    addRoute(w, span('ends', [[0, 3, R], [1, 3, R], [2, 3, R], [3, 3, X]]));
+    addRoute(w, span('down', [[3, 1, R], [3, 2, R], [3, 3, X], [3, 4, R], [3, 5, R]]));
+
+    // `holder` is stopped inside the junction and stays there, so it holds the box.
+    w.vehicles.push(car('holder', 'down', 85));
+    w.vehicles.push(car('blocker', 'down', 120, 0, VehicleMode.Parked));
+    w.vehicles.push(car('arriver', 'ends', 0, 40));
+
+    for (let i = 0; i < 900; i++) step(w, DT);
+
+    const holder = find(w, 'holder');
+    // Premise: the holder really is inside the junction cell, whose extent is [60,100].
+    expect(holder.arcDistance).toBeGreaterThan(60);
+    expect(holder.arcDistance).toBeLessThan(100);
+    expect(holder.speed).toBeLessThan(1e-3);
+
+    // So the terminal-junction car is held at its own stop line, at arc 100.
+    const arriver = find(w, 'arriver');
+    expect(arriver.arcDistance).toBeLessThan(100);
+    expect(arriver.arcDistance).toBeGreaterThan(100 - 3 * DEFAULT_IDM.s0);
   });
 
   it('stops a car inserted closer than its own braking distance from driving through the one ahead', () => {
