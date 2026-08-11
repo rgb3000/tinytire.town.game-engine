@@ -1175,3 +1175,144 @@ describe('TrafficAdapter fold safety', () => {
     }
   });
 });
+
+describe('TrafficAdapter.getCurrentCell', () => {
+  it('names the cell whose centre the car is nearest to', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+
+    expect(adapter.getCurrentCell(car)).toEqual({ gx: 0, gy: 0 });
+
+    // Two and a bit tiles along, so cell 2 is the nearest centre.
+    for (let i = 0; i < 600 && adapter.getArc(car) < 2.2 * 40; i++) adapter.update(1 / 60);
+    expect(adapter.getArc(car)).toBeGreaterThan(2.2 * 40);
+    expect(adapter.getArc(car)).toBeLessThan(2.5 * 40);
+    expect(adapter.getCurrentCell(car)).toEqual({ gx: 2, gy: 0 });
+  });
+
+  it('has no answer for a car it holds no route for', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    expect(adapter.getCurrentCell(makeCar())).toBeNull();
+  });
+});
+
+describe('TrafficAdapter.consumePassedCells', () => {
+  function drainTo(adapter: TrafficAdapter, car: Car, arc: number): string[] {
+    const seen: string[] = [];
+    for (let i = 0; i < 2000 && adapter.getArc(car) < arc; i++) {
+      adapter.update(1 / 60);
+      adapter.consumePassedCells(car, (gx, gy) => seen.push(`${gx},${gy}`));
+    }
+    return seen;
+  }
+
+  it('reports each cell once, as the car reaches the next one', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+
+    const seen = drainTo(adapter, car, 3.5 * 40);
+    expect(seen).toEqual(['0,0', '1,0', '2,0']);
+  });
+
+  it('never reports the last cell, which is the destination the car is standing on', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+
+    const seen = drainTo(adapter, car, 5 * 40);
+    // The car comes to rest a standstill gap short of the destination, so it is inside the
+    // last cell without ever reaching its centre — and the last cell is never reported.
+    const route = adapter.getRouteFor(car)!;
+    expect(adapter.getArc(car)).toBeGreaterThan(route.cellDist[route.cells.length - 2]);
+    expect(adapter.getArc(car)).toBeLessThan(route.length);
+    expect(seen).toEqual(['0,0', '1,0', '2,0', '3,0']);
+  });
+
+  it('re-walks a rerouted car, because the cells behind it on the new route are ones it no longer needs', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+    drainTo(adapter, car, 3.5 * 40);
+
+    // Same geometry, fresh route, position preserved — so the car is still at the same arc.
+    expect(adapter.installRoute(car, gridPath(6), true)).toBe(true);
+    const again: string[] = [];
+    adapter.consumePassedCells(car, (gx, gy) => again.push(`${gx},${gy}`));
+
+    expect(again).toEqual(['0,0', '1,0', '2,0']);
+  });
+});
+
+describe('TrafficAdapter.crossesPendingDeletionAhead', () => {
+  it('sees a cell marked ahead of the car and not one marked behind it', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+    for (let i = 0; i < 2000 && adapter.getArc(car) < 2.2 * 40; i++) adapter.update(1 / 60);
+    expect(adapter.getCurrentCell(car)).toEqual({ gx: 2, gy: 0 });
+
+    expect(adapter.crossesPendingDeletionAhead(car)).toBe(false);
+
+    grid.setCell(0, 0, { pendingDeletion: true });
+    expect(adapter.crossesPendingDeletionAhead(car)).toBe(false);
+
+    grid.setCell(4, 0, { pendingDeletion: true });
+    expect(adapter.crossesPendingDeletionAhead(car)).toBe(true);
+  });
+
+  it('reads the grid, not the snapshot the route was built from', () => {
+    // The caller asks precisely because a cell was marked *after* the route was compiled.
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+    expect(adapter.getRouteFor(car)!.segments.every(s => !s.pendingDeletion)).toBe(true);
+
+    grid.setCell(3, 0, { pendingDeletion: true });
+    expect(adapter.crossesPendingDeletionAhead(car)).toBe(true);
+  });
+});
+
+describe('TrafficAdapter.isCellOccupied', () => {
+  it('finds a car by where the simulation holds it, not by where it was last drawn', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+
+    expect(adapter.isCellOccupied(0, 0)).toBe(true);
+    expect(adapter.isCellOccupied(3, 0)).toBe(false);
+
+    for (let i = 0; i < 2000 && adapter.getArc(car) < 3 * 40; i++) adapter.update(1 / 60);
+    // Deliberately no `writeBack`: the mirror on the car is stale and must not be the source.
+    expect(car.pixelPos.x).toBeLessThan(40);
+    expect(adapter.isCellOccupied(0, 0)).toBe(false);
+    expect(adapter.isCellOccupied(3, 0)).toBe(true);
+  });
+
+  it('forgets a despawned car', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+    adapter.removeVehicle(car);
+    expect(adapter.isCellOccupied(0, 0)).toBe(false);
+  });
+});
