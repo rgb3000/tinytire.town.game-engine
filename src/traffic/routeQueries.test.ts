@@ -19,9 +19,9 @@ const arcOfCell = (i: number): number => i * TILE_SIZE;
 /** Arc length of a straight run of `n` cells: `n - 1` gaps between centres. */
 const arcLength = (n: number): number => (n - 1) * TILE_SIZE;
 
-function roadCells(from: number, to: number): RouteCellInput[] {
+function roadCells(from: number, to: number, gy = 0): RouteCellInput[] {
   return Array.from({ length: to - from + 1 }, (_, i) => ({
-    pos: { gx: from + i, gy: 0 },
+    pos: { gx: from + i, gy },
     kind: SegmentKind.Road,
     speedLimit: 40,
     pendingDeletion: false,
@@ -31,6 +31,11 @@ function roadCells(from: number, to: number): RouteCellInput[] {
 /** A straight eastbound run of `n` road cells along y = 0, from gx=0 to gx=n-1. */
 function straight(n: number): RouteInput {
   return { id: 'r1', spans: [{ kind: 'grid', cells: roadCells(0, n - 1) }] };
+}
+
+/** The same run, moved off row zero. See `routeCoversCell is sensitive to the row`. */
+function straightOnRow(n: number, gy: number): RouteInput {
+  return { id: 'r1', spans: [{ kind: 'grid', cells: roadCells(0, n - 1, gy) }] };
 }
 
 /** A straight eastbound highway polyline along the tile centre line. */
@@ -185,6 +190,44 @@ describe('routeCoversCell', () => {
   it('rejects every cell for an inverted range', () => {
     const route = buildRoute(straight(5))!;
     expect(routeCoversCell(route, 1, 0, arcLength(5), 0)).toBe(false);
+  });
+});
+
+describe('routeCoversCell is sensitive to the row', () => {
+  /**
+   * Every other fixture in this file, in `route.test.ts` and in `obstacles.test.ts` runs
+   * along gy = 0, where a query that ignored `gy` entirely would agree with one that did
+   * not. That makes the `c.gy !== gy` half of the comparison invisible: deleting it used to
+   * survive the whole traffic suite. It is the road-deletion dependency check, so the cost
+   * of losing it is a road at (3, 0) reported as depended-upon by a car driving at (3, 7) —
+   * a deletion refused for ever, on a cell no car will ever reach.
+   */
+  const ROW = 7;
+
+  it('finds a cell on the route\'s own row', () => {
+    const route = buildRoute(straightOnRow(5, ROW))!;
+    // Premise: the route really is off row zero, and really does carry column 3.
+    expect(route.cells.map(c => c.gy)).toEqual([ROW, ROW, ROW, ROW, ROW]);
+    expect(route.cells.map(c => c.gx)).toEqual([0, 1, 2, 3, 4]);
+
+    expect(routeCoversCell(route, 3, ROW, 0, arcLength(5))).toBe(true);
+  });
+
+  it('rejects the same column on a row the route never visits', () => {
+    const route = buildRoute(straightOnRow(5, ROW))!;
+    expect(routeCoversCell(route, 3, 0, 0, arcLength(5))).toBe(false);
+    expect(routeCoversCell(route, 0, ROW - 1, 0, arcLength(5))).toBe(false);
+  });
+
+  it('rejects a whole parallel row, at every arc range the callers use', () => {
+    const route = buildRoute(straightOnRow(5, ROW))!;
+    const mid = arcOfCell(2);
+    for (let gx = 0; gx < 5; gx++) {
+      // The three ranges `carDependsOnCell` asks for: travelled, remaining, whole route.
+      expect(routeCoversCell(route, gx, 0, 0, mid)).toBe(false);
+      expect(routeCoversCell(route, gx, 0, mid, arcLength(5))).toBe(false);
+      expect(routeCoversCell(route, gx, 0, 0, arcLength(5))).toBe(false);
+    }
   });
 });
 
