@@ -52,6 +52,7 @@ export class DemoGame {
       this.webglRenderer, this.grid,
       () => this.spawnSystem.getHouses(),
       () => this.spawnSystem.getBusinesses(),
+      this.carSystem.getTrafficAdapter(),
     );
     this.renderer.rebuildTerrain(
       this.obstacleSystem.getMountainCells(),

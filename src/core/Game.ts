@@ -196,7 +196,7 @@ export class Game {
     if (isDesigner) this.spawnSystem.disableAutoSpawn = true;
     this.carSystem = new CarSystem(this.pathfinder, this.grid, this.pendingDeletionSystem, this.cfg, this.highwaySystem, this.gasStationSystem);
 
-    this.renderer = new Renderer(this.webglRenderer, this.grid, () => this.spawnSystem.getHouses(), () => this.spawnSystem.getBusinesses());
+    this.renderer = new Renderer(this.webglRenderer, this.grid, () => this.spawnSystem.getHouses(), () => this.spawnSystem.getBusinesses(), this.carSystem.getTrafficAdapter());
     this.renderer.rebuildTerrain(this.obstacleSystem.getMountainCells(), this.obstacleSystem.getLakeCells(), this.obstacleSystem.getMountainTriangles(), this.obstacleSystem.getLakeTriangles());
     if (this.mapConfig?.backgroundTiles && this.mapConfig.paintPalette) {
       this.renderer.setBackgroundTiles(

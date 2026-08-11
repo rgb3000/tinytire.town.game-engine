@@ -16,6 +16,7 @@ import { ObstacleLayer } from './layers/ObstacleLayer';
 import { LakeLayer } from './layers/LakeLayer';
 import { RoadDebugLayer } from './layers/RoadDebugLayer';
 import { CarRouteLayer } from './layers/CarRouteLayer';
+import type { TrafficAdapter } from '../systems/car/TrafficAdapter';
 import { HighwayLayer } from './layers/HighwayLayer';
 import { createBackdropPlane } from './backdrop';
 import type { HighwaySystem } from '../systems/HighwaySystem';
@@ -47,6 +48,7 @@ export class Renderer {
   private lakeLayer: LakeLayer;
   private roadDebugLayer: RoadDebugLayer;
   private carRouteLayer: CarRouteLayer;
+  private trafficAdapter: TrafficAdapter | null;
   private highwayLayer: HighwayLayer;
   private grid: Grid;
   private lakeCells: GridPos[] = [];
@@ -105,8 +107,21 @@ export class Renderer {
   protected viewportWidth = CANVAS_WIDTH;
   protected viewportHeight = CANVAS_HEIGHT;
 
-  constructor(webglRenderer: THREE.WebGLRenderer, grid: Grid, getHouses: () => House[] = () => [], getBusinesses: () => Business[] = () => []) {
+  /**
+   * `trafficAdapter` is the simulation the route overlays read; null for a renderer with no
+   * simulation behind it, which is the map designer. It is a constructor collaborator rather
+   * than a per-frame argument because a `Renderer` never outlives the world it was built
+   * for — `Game.buildWorld` makes both, in that order, and a restart makes both again.
+   */
+  constructor(
+    webglRenderer: THREE.WebGLRenderer,
+    grid: Grid,
+    getHouses: () => House[] = () => [],
+    getBusinesses: () => Business[] = () => [],
+    trafficAdapter: TrafficAdapter | null = null,
+  ) {
     this.webglRenderer = webglRenderer;
+    this.trafficAdapter = trafficAdapter;
 
     // Scene
     this.scene = new THREE.Scene();
@@ -607,9 +622,14 @@ export class Renderer {
     this.buildingLayer.update(this.scene, houses, businesses, gasStations, cars);
     this.carLayer.update(this.scene, cars, isPaused ? 1 : alpha);
     this.debugLayer.update(this.scene, spawnBounds);
-    if (ROAD_DEBUG) this.roadDebugLayer.update(this.scene, this.grid, cars, businesses);
-    if (isPaused) this.carRouteLayer.update(this.scene, cars, houses, businesses, mouseWorldX, mouseWorldY);
-    else this.carRouteLayer.clear(this.scene);
+    if (ROAD_DEBUG) this.roadDebugLayer.update(this.scene, this.grid, cars, this.trafficAdapter);
+    if (isPaused && this.trafficAdapter) {
+      this.carRouteLayer.update(
+        this.scene, this.trafficAdapter, cars, houses, businesses, mouseWorldX, mouseWorldY,
+      );
+    } else {
+      this.carRouteLayer.clear(this.scene);
+    }
     // Render only when something changed
     if (this.needsRender && !this.isCapturing) {
       this.webglRenderer.render(this.scene, this.camera);

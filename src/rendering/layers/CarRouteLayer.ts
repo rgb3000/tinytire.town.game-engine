@@ -6,14 +6,27 @@ import type { Car } from '../../entities/Car';
 import { CarState } from '../../entities/Car';
 import type { House } from '../../entities/House';
 import type { Business } from '../../entities/Business';
+import type { PixelPos } from '../../types';
 import { COLOR_MAP, TILE_SIZE } from '../../constants';
-import { stepGridPos } from '../../systems/car/CarRouter';
+import type { TrafficAdapter } from '../../systems/car/TrafficAdapter';
+import { drawableHalves, toLinePositions } from './routeOverlay';
 
 const LINE_Y = 1;
 const HOVER_RADIUS = TILE_SIZE * 0.35;
 const MARKER_RADIUS = TILE_SIZE * 0.3;
 const MARKER_SEGMENTS = 16;
 const LINE_WIDTH = 3; // px for Line2
+
+/**
+ * How far the car must have moved along its route before the overlay is rebuilt, in pixels.
+ *
+ * Arc distance is continuous, so an exact comparison would rebuild — allocate two geometries
+ * and two materials, dispose the old ones — on every frame the car is moving at all. A
+ * sub-pixel change cannot alter the drawing, and at the default `CAR_SPEED` a car covers a
+ * pixel roughly every 60th of a second, so this costs at most one frame of staleness while
+ * making a stationary car free.
+ */
+const ARC_REBUILD_EPSILON = 1;
 
 export class CarRouteLayer {
   private group: THREE.Group | null = null;
@@ -23,12 +36,13 @@ export class CarRouteLayer {
   setGameColors(colors: Record<number, string>): void {
     this.gameColors = { ...colors };
   }
-  private cachedPathIndex = -1;
+  private cachedArc = -1;
   private cachedFuel = -1;
   private resolution = new THREE.Vector2(window.innerWidth, window.innerHeight);
 
   update(
     scene: THREE.Scene,
+    adapter: TrafficAdapter,
     cars: Car[],
     houses: House[],
     businesses: Business[],
@@ -53,15 +67,16 @@ export class CarRouteLayer {
     if (!closestCar) {
       this.clearFromScene(scene);
       this.hoveredCarId = null;
-      this.cachedPathIndex = -1;
+      this.cachedArc = -1;
       return;
     }
 
     // Skip rebuild if same car and same progress
+    const arc = adapter.getArc(closestCar);
     const fuelFloored = Math.floor(closestCar.fuel);
     if (
       closestCar.id === this.hoveredCarId &&
-      closestCar.pathIndex === this.cachedPathIndex &&
+      Math.abs(arc - this.cachedArc) < ARC_REBUILD_EPSILON &&
       fuelFloored === this.cachedFuel
     ) {
       return;
@@ -69,7 +84,7 @@ export class CarRouteLayer {
 
     this.clearFromScene(scene);
     this.hoveredCarId = closestCar.id;
-    this.cachedPathIndex = closestCar.pathIndex;
+    this.cachedArc = arc;
     this.cachedFuel = fuelFloored;
 
     // Update resolution for LineMaterial
@@ -78,11 +93,12 @@ export class CarRouteLayer {
     const group = new THREE.Group();
     const color = new THREE.Color(this.gameColors[closestCar.color]);
 
-    // Use smoothPath if available, otherwise fall back to grid path
-    if (closestCar.smoothPath.length > 1) {
-      this.buildFromSmoothPath(group, closestCar, color);
-    } else if (closestCar.path.length > 1) {
-      this.buildFromGridPath(group, closestCar, color);
+    // One route, cut where the car is: travelled behind it, remaining ahead.
+    const route = adapter.getRouteFor(closestCar);
+    if (route !== null) {
+      const { travelled, remaining } = drawableHalves(route, arc);
+      if (travelled) this.addRouteLine(group, travelled, color, true);
+      if (remaining) this.addRouteLine(group, remaining, color, false);
     }
 
     // Fuel indicator
@@ -110,120 +126,40 @@ export class CarRouteLayer {
     scene.add(group);
   }
 
-  private buildFromSmoothPath(group: THREE.Group, car: Car, color: THREE.Color): void {
-    const sp = car.smoothPath;
-
-    // Find split point: closest smoothPath point to car's current pixel position
-    let splitIdx = 0;
-    let minDist = Infinity;
-    for (let i = 0; i < sp.length; i++) {
-      const dx = sp[i].x - car.pixelPos.x;
-      const dy = sp[i].y - car.pixelPos.y;
-      const d = dx * dx + dy * dy;
-      if (d < minDist) {
-        minDist = d;
-        splitIdx = i;
-      }
-    }
-
-    // Traveled portion (start -> current position): dashed
-    if (splitIdx > 0) {
-      const positions: number[] = [];
-      for (let i = 0; i <= splitIdx; i++) {
-        positions.push(sp[i].x, LINE_Y, sp[i].y);
-      }
-      const geom = new LineGeometry();
-      geom.setPositions(positions);
-      const mat = new LineMaterial({
-        color: color.getHex(),
-        linewidth: LINE_WIDTH,
-        resolution: this.resolution,
+  /**
+   * One half of the route as a screen-space-width line.
+   *
+   * The travelled half is dashed and faded, the remaining half solid. Only the caller's
+   * point list distinguishes them, which is what collapsed the two near-identical builders
+   * this replaced — one reading `car.smoothPath`, one rebuilding tile centres from
+   * `car.path` — into a single code path over the route the car is actually driving.
+   *
+   * Callers must have rejected degenerate halves first ({@link drawableHalves}): a
+   * zero-length dashed line divides by zero in `computeLineDistances`.
+   */
+  private addRouteLine(
+    group: THREE.Group, points: PixelPos[], color: THREE.Color, dashed: boolean,
+  ): void {
+    const geom = new LineGeometry();
+    geom.setPositions(toLinePositions(points, LINE_Y));
+    const mat = new LineMaterial({
+      color: color.getHex(),
+      linewidth: LINE_WIDTH,
+      resolution: this.resolution,
+      depthTest: false,
+      ...(dashed ? {
         transparent: true,
         opacity: 0.4,
         dashed: true,
         dashSize: 6,
         gapSize: 4,
         dashScale: 1,
-        depthTest: false,
-      });
-      const line = new Line2(geom, mat);
-      line.renderOrder = 998;
-      line.computeLineDistances();
-      group.add(line);
-    }
-
-    // Remaining portion (current position -> end): solid line
-    if (splitIdx < sp.length - 1) {
-      const positions: number[] = [];
-      positions.push(car.pixelPos.x, LINE_Y, car.pixelPos.y);
-      for (let i = splitIdx; i < sp.length; i++) {
-        positions.push(sp[i].x, LINE_Y, sp[i].y);
-      }
-      const geom = new LineGeometry();
-      geom.setPositions(positions);
-      const mat = new LineMaterial({
-        color: color.getHex(),
-        linewidth: LINE_WIDTH,
-        resolution: this.resolution,
-        depthTest: false,
-      });
-      const line = new Line2(geom, mat);
-      line.renderOrder = 998;
-      group.add(line);
-    }
-  }
-
-  private buildFromGridPath(group: THREE.Group, car: Car, color: THREE.Color): void {
-    const path = car.path;
-    const idx = car.pathIndex;
-
-    // Traveled portion
-    if (idx > 0) {
-      const positions: number[] = [];
-      for (let i = 0; i <= idx; i++) {
-        const p = stepGridPos(path[i]);
-        positions.push((p.gx + 0.5) * TILE_SIZE, LINE_Y, (p.gy + 0.5) * TILE_SIZE);
-      }
-      const geom = new LineGeometry();
-      geom.setPositions(positions);
-      const mat = new LineMaterial({
-        color: color.getHex(),
-        linewidth: LINE_WIDTH,
-        resolution: this.resolution,
-        transparent: true,
-        opacity: 0.4,
-        dashed: true,
-        dashSize: 6,
-        gapSize: 4,
-        dashScale: 1,
-        depthTest: false,
-      });
-      const line = new Line2(geom, mat);
-      line.renderOrder = 998;
-      line.computeLineDistances();
-      group.add(line);
-    }
-
-    // Remaining portion
-    if (idx < path.length - 1) {
-      const positions: number[] = [];
-      positions.push(car.pixelPos.x, LINE_Y, car.pixelPos.y);
-      for (let i = idx + 1; i < path.length; i++) {
-        const p = stepGridPos(path[i]);
-        positions.push((p.gx + 0.5) * TILE_SIZE, LINE_Y, (p.gy + 0.5) * TILE_SIZE);
-      }
-      const geom = new LineGeometry();
-      geom.setPositions(positions);
-      const mat = new LineMaterial({
-        color: color.getHex(),
-        linewidth: LINE_WIDTH,
-        resolution: this.resolution,
-        depthTest: false,
-      });
-      const line = new Line2(geom, mat);
-      line.renderOrder = 998;
-      group.add(line);
-    }
+      } : {}),
+    });
+    const line = new Line2(geom, mat);
+    line.renderOrder = 998;
+    if (dashed) line.computeLineDistances();
+    group.add(line);
   }
 
   private addFuelIndicator(group: THREE.Group, car: Car): void {
@@ -308,7 +244,7 @@ export class CarRouteLayer {
   clear(scene: THREE.Scene): void {
     this.clearFromScene(scene);
     this.hoveredCarId = null;
-    this.cachedPathIndex = -1;
+    this.cachedArc = -1;
     this.cachedFuel = -1;
   }
 

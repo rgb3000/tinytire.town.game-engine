@@ -430,21 +430,54 @@ export class TrafficAdapter {
    * safe direction for a query whose answer decides whether road may be deleted.
    */
   carDependsOnCell(car: Car, gx: number, gy: number): boolean {
+    const range = this.dependencyRange(car);
+    if (range === null) return false;
+    return routeCoversCell(range.route, gx, gy, range.fromArc, range.toArc);
+  }
+
+  /**
+   * Every grid cell {@link carDependsOnCell} would answer yes for, in route order.
+   *
+   * The debug overlay wants the whole set at once to outline it, and asking the boolean
+   * form once per road cell on the board would walk every route once per cell. Both read
+   * the same range off {@link dependencyRange}, so the overlay cannot come to disagree with
+   * the rule that actually governs deletion — which is the entire point of drawing it.
+   *
+   * Two consequences of `route.cells` are visible here and are not defects. A cell folded
+   * into a highway span is absent, so a destination sitting on a highway endpoint is not
+   * outlined; and a car mid-crossing outlines the cells at *both* ends of the highway,
+   * because a highway span contributes no cells and stretches its neighbours across itself.
+   */
+  cellsCarDependsOn(car: Car): GridPos[] {
+    const range = this.dependencyRange(car);
+    if (range === null) return [];
+    return cellsBetween(range.route, range.fromArc, range.toArc);
+  }
+
+  /**
+   * The stretch of route a car's state makes it depend on, or null when there is none.
+   *
+   * States the old `Game.tryRemoveRoad` loops did not cover — `Idle`, `Stranded`,
+   * `GoingToGasStation` — still do not.
+   */
+  private dependencyRange(
+    car: Car,
+  ): { route: Route; fromArc: number; toArc: number } | null {
     const vehicle = this.vehiclesByCar.get(car.id);
-    if (!vehicle) return false;
+    if (!vehicle) return null;
     const route = this.world.routes.get(vehicle.routeId);
-    if (!route) return false;
+    if (!route) return null;
 
     if (car.state === CarState.Unloading || car.state === CarState.Refueling) {
-      return routeCoversCell(route, gx, gy, 0, route.length);
+      return { route, fromArc: 0, toArc: route.length };
     }
     if (car.state === CarState.GoingToBusiness) {
-      return routeCoversCell(route, gx, gy, 0, vehicle.arcDistance);
+      return { route, fromArc: 0, toArc: vehicle.arcDistance };
     }
     if (car.state === CarState.GoingHome) {
-      return routeCoversCell(route, gx, gy, vehicle.arcDistance, route.length);
+      return { route, fromArc: vehicle.arcDistance, toArc: route.length };
     }
-    return false;
+    return null;
   }
 
   /**

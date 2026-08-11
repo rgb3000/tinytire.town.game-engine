@@ -1,11 +1,9 @@
 import * as THREE from 'three';
 import type { Grid } from '../../core/Grid';
 import type { Car } from '../../entities/Car';
-import type { Business } from '../../entities/Business';
-import { CarState } from '../../entities/Car';
 import { CellType } from '../../types';
 import { GRID_COLS, GRID_ROWS, TILE_SIZE } from '../../constants';
-import { stepGridPos } from '../../systems/car/CarRouter';
+import type { TrafficAdapter } from '../../systems/car/TrafficAdapter';
 
 const OUTLINE_Y = 0.6;
 
@@ -21,27 +19,32 @@ export class RoadDebugLayer {
   private yellowMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
   private dotGeom = new THREE.SphereGeometry(1.5, 8, 6);
 
-  update(scene: THREE.Scene, grid: Grid, cars: Car[], _businesses: Business[]): void {
+  /**
+   * Outline every road and connector cell, red where some car still depends on it.
+   *
+   * "Depends" is {@link TrafficAdapter.cellsCarDependsOn} — the same query
+   * `Game.handleTryErase` asks before it removes a cell — so what draws red here is exactly
+   * what the game would refuse to delete outright. Asking the deletion rule rather than
+   * restating it is the point: an overlay that disagreed with the rule it exists to show
+   * would be worse than no overlay.
+   *
+   * It used to reproduce the three `car.path`/`car.pathIndex`/`car.outboundPath` loops that
+   * `Game.tryRemoveRoad` had. Nothing has written those fields since the simulation took
+   * over movement, so the set was permanently empty and every cell drew green.
+   *
+   * `adapter` is null for a `Renderer` with no simulation behind it — the map designer —
+   * where there are no cars to depend on anything and only the outlines are wanted.
+   */
+  update(scene: THREE.Scene, grid: Grid, cars: Car[], adapter: TrafficAdapter | null): void {
     this.clearFromScene(scene);
 
-    // Build reserved cell set from car paths
+    // The cells cars still depend on, straight from the simulation.
     const reserved = new Set<string>();
 
-    for (const car of cars) {
-      if (car.state === CarState.GoingToBusiness) {
-        for (let i = 0; i < car.pathIndex; i++) {
-          const p = stepGridPos(car.path[i]);
-          reserved.add(`${p.gx},${p.gy}`);
-        }
-      } else if (car.state === CarState.Unloading || car.state === CarState.Refueling) {
-        for (const step of car.outboundPath) {
-          const p = stepGridPos(step);
-          reserved.add(`${p.gx},${p.gy}`);
-        }
-      } else if (car.state === CarState.GoingHome) {
-        for (let i = car.pathIndex; i < car.path.length; i++) {
-          const p = stepGridPos(car.path[i]);
-          reserved.add(`${p.gx},${p.gy}`);
+    if (adapter) {
+      for (const car of cars) {
+        for (const cell of adapter.cellsCarDependsOn(car)) {
+          reserved.add(`${cell.gx},${cell.gy}`);
         }
       }
     }
