@@ -77,7 +77,7 @@ describe('TrafficAdapter.installRoute', () => {
 });
 
 describe('TrafficAdapter.writeBack', () => {
-  it('derives pixel position and angle from the arc distance', () => {
+  it('derives the pixel position from the arc distance', () => {
     const grid = new Grid(20, 5);
     roadRow(grid, 6);
     const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
@@ -89,7 +89,25 @@ describe('TrafficAdapter.writeBack', () => {
     adapter.writeBack([car]);
 
     expect(car.pixelPos.x).toBeGreaterThan(20);
-    expect(car.renderAngle).toBeCloseTo(0, 1);
+  });
+
+  it('faces the car along the route, which a corner is the only place to see', () => {
+    // `renderAngle` starts at 0, and 0 is also the angle of an eastbound straight run — so
+    // asserting it on the fixture above passes with the write deleted. Past a corner the
+    // travel direction and the default disagree, which is what makes this discriminate.
+    const { grid } = crossGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const path = [...rowPath(0, 5, 5), ...columnPath(6, 11, 5)];
+
+    const beforeCorner = makeCar();
+    placeAt(adapter, beforeCorner, path, 2 * TILE);
+    const afterCorner = makeCar();
+    placeAt(adapter, afterCorner, path, 8 * TILE);
+    adapter.writeBack([beforeCorner, afterCorner]);
+
+    // Premise: the route really does turn, so the two angles are not the same number.
+    expect(beforeCorner.renderAngle).toBeCloseTo(0, 1);
+    expect(afterCorner.renderAngle).toBeCloseTo(Math.PI / 2, 1);
   });
 
   it('records the previous position so the renderer can interpolate', () => {
@@ -107,6 +125,49 @@ describe('TrafficAdapter.writeBack', () => {
 
     expect(car.prevPixelPos.x).toBeCloseTo(first, 5);
     expect(car.pixelPos.x).toBeGreaterThan(first);
+  });
+
+  it('moves the car down the screen on a route that runs south', () => {
+    // Every other fixture here is a row, which leaves `pixelPos.y` and `prevPixelPos.y` at
+    // the value the constructor gave them — so a dropped y-write is invisible on one. Only
+    // a north-south route separates the write from the initialiser.
+    const grid = new Grid(5, 20);
+    for (let gy = 0; gy < 6; gy++) grid.setCell(0, gy, { type: CellType.Road });
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, columnPath(0, 5, 0), false);
+
+    for (let i = 0; i < 30; i++) adapter.update(DT);
+    adapter.writeBack([car]);
+    const first = car.pixelPos.y;
+    for (let i = 0; i < 30; i++) adapter.update(DT);
+    adapter.writeBack([car]);
+
+    expect(first).toBeGreaterThan(TILE / 2);
+    expect(car.pixelPos.y).toBeGreaterThan(first);
+    expect(car.prevPixelPos.y).toBeCloseTo(first, 5);
+  });
+
+  it("carries last frame's angle forward for interpolation", () => {
+    // Same trap as the position: `prevRenderAngle` starts at 0 and a straight eastbound run
+    // never leaves it, so the frame that matters is one where the car has already turned.
+    const { grid } = crossGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, [...rowPath(0, 5, 5), ...columnPath(6, 11, 5)], false);
+
+    let highestAngle = 0;
+    let highestPrev = 0;
+    for (let i = 0; i < 60 * 20; i++) {
+      adapter.update(DT);
+      adapter.writeBack([car]);
+      highestAngle = Math.max(highestAngle, car.renderAngle);
+      highestPrev = Math.max(highestPrev, car.prevRenderAngle);
+    }
+
+    // Premise: it got round the corner, so there were frames with a non-zero angle to carry.
+    expect(highestAngle).toBeGreaterThan(1);
+    expect(highestPrev).toBeGreaterThan(1);
   });
 });
 
@@ -905,12 +966,21 @@ describe('TrafficAdapter crossings', () => {
     expect(car.elevationY).toBe(0);
 
     let liftedAt = -1;
+    let highest = 0;
+    let highestPrev = 0;
     for (let i = 0; i < 60 * 15; i++) {
       adapter.update(DT);
       adapter.writeBack([car]);
       if (car.onHighway && liftedAt < 0) liftedAt = i * DT;
+      if (car.onHighway) highest = Math.max(highest, car.elevationY);
+      highestPrev = Math.max(highestPrev, car.prevElevationY);
     }
     expect(liftedAt).toBeGreaterThan(0);
+    // The height itself, not just the flag. On the ground `elevationY` is 0, which is its
+    // default, so only a reading taken mid-crossing tells the write from the initialiser —
+    // and the same goes for the previous-frame copy the renderer interpolates from.
+    expect(highest).toBeGreaterThan(0);
+    expect(highestPrev).toBeGreaterThan(0);
     expect(car.onHighway).toBe(false);
     expect(car.elevationY).toBe(0);
   });

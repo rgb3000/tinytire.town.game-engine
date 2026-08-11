@@ -94,9 +94,9 @@ export class CarSystem {
    * otherwise, so an under-report deletes road out from under a moving car. It used to walk
    * `car.path` and `car.pathIndex` in `Game`; those fields stopped being written when the
    * simulation took over movement, which made the list permanently empty and silently
-   * un-typechecked — they have since been deleted, so that loop no longer compiles. Asking here keeps the question next to the two things that answer it —
-   * the car list and the adapter — and puts it somewhere a Node test can reach, which
-   * `Game` is not.
+   * un-typechecked. They have since been deleted, so that loop no longer compiles. Asking
+   * here keeps the question next to the two things that answer it — the car list and the
+   * adapter — and puts it somewhere a Node test can reach, which `Game` is not.
    *
    * The three-way asymmetry (travelled cells for an outbound car, remaining cells for a
    * homebound one, the whole route for a parked one) lives in

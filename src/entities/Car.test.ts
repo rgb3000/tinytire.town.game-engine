@@ -52,6 +52,11 @@ describe('Car', () => {
     const car = new Car('house-1', GameColor.Blue, { gx: 2, gy: 3 }, 30);
     const listFields = Object.entries(car).filter(([, value]) => Array.isArray(value));
     expect(listFields).toEqual([]);
+    // By name too, so a field re-declared without an initialiser — still an own key under
+    // `useDefineForClassFields` — fails with a legible message rather than on its shape.
+    for (const name of ['path', 'outboundPath', 'pathIndex', 'smoothPath']) {
+      expect(Object.keys(car)).not.toContain(name);
+    }
   });
 });
 
