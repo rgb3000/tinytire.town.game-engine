@@ -87,6 +87,29 @@ export class CarSystem {
     return this.adapter;
   }
 
+  /**
+   * The cars that would be harmed if the road cell `(gx, gy)` vanished right now.
+   *
+   * `Game.handleTryErase` removes the cell outright when this is empty and marks it pending
+   * otherwise, so an under-report deletes road out from under a moving car. It used to walk
+   * `car.path` and `car.pathIndex` in `Game`; those fields stopped being written when the
+   * simulation took over movement, which made the list permanently empty and silently
+   * un-typechecked. Asking here keeps the question next to the two things that answer it —
+   * the car list and the adapter — and puts it somewhere a Node test can reach, which
+   * `Game` is not.
+   *
+   * The three-way asymmetry (travelled cells for an outbound car, remaining cells for a
+   * homebound one, the whole route for a parked one) lives in
+   * {@link TrafficAdapter.carDependsOnCell}.
+   */
+  carsDependingOn(gx: number, gy: number): string[] {
+    const ids: string[] = [];
+    for (const car of this.cars) {
+      if (this.adapter.carDependsOnCell(car, gx, gy)) ids.push(car.id);
+    }
+    return ids;
+  }
+
   getScore(): number {
     return this.score;
   }

@@ -26,7 +26,6 @@ import { HighwayDrawer } from '../input/HighwayDrawer';
 import { GasStationPlacer } from '../input/GasStationPlacer';
 import { GasStationSystem } from '../systems/GasStationSystem';
 import { CarState } from '../entities/Car';
-import { stepGridPos } from '../systems/car/CarRouter';
 import { SPAWN_DEBUG, CAR_DEBUG, TILE_SIZE, buildConfig } from '../constants';
 import { CarEventLog } from '../debug/CarEventLog';
 import { EconomySystem } from '../systems/EconomySystem';
@@ -596,36 +595,8 @@ export class Game {
 
     if (cell.pendingDeletion) return false;
 
-    // Check all car states that depend on this cell
-    const cars = this.carSystem.getCars();
-    const dependentCarIds: string[] = [];
-    for (const car of cars) {
-      if (car.state === CarState.GoingToBusiness && car.path.length > 0) {
-        for (let i = 0; i < car.pathIndex; i++) {
-          const p = stepGridPos(car.path[i]);
-          if (p.gx === gx && p.gy === gy) {
-            dependentCarIds.push(car.id);
-            break;
-          }
-        }
-      } else if (car.state === CarState.Unloading || car.state === CarState.Refueling) {
-        for (const step of car.outboundPath) {
-          const p = stepGridPos(step);
-          if (p.gx === gx && p.gy === gy) {
-            dependentCarIds.push(car.id);
-            break;
-          }
-        }
-      } else if (car.state === CarState.GoingHome && car.path.length > 0) {
-        for (let i = car.pathIndex; i < car.path.length; i++) {
-          const p = stepGridPos(car.path[i]);
-          if (p.gx === gx && p.gy === gy) {
-            dependentCarIds.push(car.id);
-            break;
-          }
-        }
-      }
-    }
+    // Which cars would this cell disappearing hurt? The simulation owns the answer.
+    const dependentCarIds = this.carSystem.carsDependingOn(gx, gy);
 
     if (dependentCarIds.length === 0) {
       if (this.roadSystem.removeRoad(gx, gy)) {

@@ -565,3 +565,112 @@ describe('CarSystem and roads the player has marked for deletion', () => {
     expect(car.state).toBe(CarState.GoingHome);
   });
 });
+
+describe('CarSystem.carsDependingOn', () => {
+  /**
+   * The question `Game.handleTryErase` asks before it deletes a road cell: an empty answer
+   * removes the cell outright, a non-empty one marks it pending until those cars are clear.
+   *
+   * It used to be answered in `Game` by walking `car.path`, `car.pathIndex` and
+   * `car.outboundPath`. The simulation stopped writing all three when it took over movement,
+   * which made the answer permanently empty — roads deleted out from under moving cars — and
+   * nothing about that was a type error. Every positive assertion below is what rejects that
+   * model: with an empty `car.path` the old loops return nothing.
+   */
+  it('leaves the fields the old road-deleter read empty, so they cannot answer', () => {
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => town.adapter.getArc(car) > 3 * TILE_SIZE, 600);
+
+    expect(car.path).toHaveLength(0);
+    expect(car.outboundPath).toHaveLength(0);
+    expect(car.pathIndex).toBe(0);
+    // ...and yet the car is demonstrably somewhere along a real route.
+    expect(town.adapter.getRouteFor(car)).not.toBeNull();
+    expect(town.adapter.getArc(car)).toBeGreaterThan(3 * TILE_SIZE);
+  });
+
+  it('reports an outbound car on the road behind it, and not on the road ahead', () => {
+    // How an outbound car gets home again: the cells it has already crossed are the ones it
+    // will need back. Deleting one ahead of it merely costs it a reroute.
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => town.adapter.getArc(car) > 3 * TILE_SIZE, 600);
+    expect(car.state).toBe(CarState.GoingToBusiness);
+
+    expect(town.carSystem.carsDependingOn(STRAIGHT[0].gx, STRAIGHT[0].gy)).toEqual([car.id]);
+    expect(town.carSystem.carsDependingOn(STRAIGHT[7].gx, STRAIGHT[7].gy)).toEqual([]);
+  });
+
+  it('reports a homebound car on the road ahead of it, and not on the road behind', () => {
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => car.state === CarState.GoingHome);
+    town.runUntil(() => town.adapter.getArc(car) > 3 * TILE_SIZE, 600);
+    expect(car.state).toBe(CarState.GoingHome);
+
+    // Homebound, so the route runs the other way: STRAIGHT[0] is what is still ahead.
+    expect(town.carSystem.carsDependingOn(STRAIGHT[0].gx, STRAIGHT[0].gy)).toEqual([car.id]);
+    expect(town.carSystem.carsDependingOn(STRAIGHT[7].gx, STRAIGHT[7].gy)).toEqual([]);
+  });
+
+  it('reports a parked car on its whole route, both ends of it', () => {
+    // Unloading is the one state with no direction: the car is standing on the connector
+    // and needs every cell it came in on to get out again.
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => car.state === CarState.Unloading);
+
+    expect(town.carSystem.carsDependingOn(STRAIGHT[0].gx, STRAIGHT[0].gy)).toEqual([car.id]);
+    expect(town.carSystem.carsDependingOn(STRAIGHT[7].gx, STRAIGHT[7].gy)).toEqual([car.id]);
+  });
+
+  it('reports nobody for a cell no car is routed through', () => {
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => town.adapter.getArc(car) > 3 * TILE_SIZE, 600);
+
+    // Premise: cars are out on the road, so an empty answer is not "no cars at all".
+    expect(town.cars.some(c => c.state !== CarState.Idle)).toBe(true);
+    expect(town.carSystem.carsDependingOn(20, 20)).toEqual([]);
+  });
+
+  it('does not confuse a cell in the same column on a different row', () => {
+    // The road runs along gy = 5. A dependency check that compared only the column would
+    // refuse for ever to delete the parallel row above it, which no car ever touches.
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => car.state === CarState.Unloading);
+    expect(town.carSystem.carsDependingOn(STRAIGHT[0].gx, STRAIGHT[0].gy)).toEqual([car.id]);
+
+    for (const cell of STRAIGHT) {
+      expect(town.carSystem.carsDependingOn(cell.gx, 0)).toEqual([]);
+      expect(town.carSystem.carsDependingOn(cell.gx, cell.gy - 1)).toEqual([]);
+    }
+  });
+
+  it('keeps a cell pending exactly as long as the car it named still depends on it', () => {
+    // End to end through the two calls `Game.handleTryErase` makes: ask, then mark pending
+    // with the answer. A cell marked with an empty list is finalised on the very next
+    // `PendingDeletionSystem.update`, which is the shape the regression took — the road went
+    // while the car was still on it.
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => car.state === CarState.GoingHome);
+    town.runUntil(() => town.adapter.getArc(car) > TILE_SIZE, 600);
+
+    const ahead = STRAIGHT[1];
+    const dependents = town.carSystem.carsDependingOn(ahead.gx, ahead.gy);
+    expect(dependents).toEqual([car.id]);
+
+    town.pending.markPending(ahead.gx, ahead.gy, dependents);
+    town.tick();
+    // Still pending: the car has not reached it yet, so it must stay on the board.
+    expect(town.pending.isPending(ahead.gx, ahead.gy)).toBe(true);
+    expect(car.state).toBe(CarState.GoingHome);
+
+    // And it drains once the car is clear, which is what `consumePassedCells` is for.
+    town.runUntil(() => !town.pending.isPending(ahead.gx, ahead.gy), 900);
+    expect(town.pending.isPending(ahead.gx, ahead.gy)).toBe(false);
+  });
+});
