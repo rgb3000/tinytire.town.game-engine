@@ -214,6 +214,63 @@ describe('buildRoute rejects input that cannot form one curve', () => {
   });
 });
 
+describe('buildRoute with cells carried by a crossing', () => {
+  /**
+   * A grid run of one cell is not a span — one cell is a point, not a curve — so the
+   * adapter folds it into the crossing beside it and hands the cell over as `entryCell` or
+   * `exitCell`. What that has to buy is a place in `cells`: `LaneIndex` keys a vehicle by an
+   * edge between two of them, so a route with fewer than two is one no lane can hold.
+   */
+  function carried(span: Partial<{ entryCell: { gx: number; gy: number }; exitCell: { gx: number; gy: number } }>): RouteSpan {
+    return { ...highway(centreX(0), centreX(4)) as Extract<RouteSpan, { kind: 'highway' }>, ...span };
+  }
+
+  it('records a carried cell at the crossing arc it sits on', () => {
+    const r = buildRoute(route([carried({ entryCell: { gx: 0, gy: 0 }, exitCell: { gx: 4, gy: 0 } })]))!;
+    expect(r.cells).toEqual([{ gx: 0, gy: 0 }, { gx: 4, gy: 0 }]);
+    expect(r.cellDist[0]).toBeCloseTo(0, 5);
+    expect(r.cellDist[1]).toBeCloseTo(r.length, 5);
+  });
+
+  it('gives a carried cell no geometry and no segment of its own', () => {
+    // The cell lies on the crossing's own terminal point, and the arc it would govern is the
+    // span boundary — which `segmentIndexAt` resolves to the neighbouring span regardless.
+    // A segment for it would be a zero-length one no lookup can ever select.
+    const plain = buildRoute(route([highway(centreX(0), centreX(4))]))!;
+    const withCells = buildRoute(route([carried({ entryCell: { gx: 0, gy: 0 }, exitCell: { gx: 4, gy: 0 } })]))!;
+    expect(withCells.points).toEqual(plain.points);
+    expect(withCells.length).toBeCloseTo(plain.length, 9);
+    expect(withCells.segments).toEqual(plain.segments);
+    expectContiguousSegments(withCells);
+  });
+
+  it('does not record a carried exit cell twice when a grid span continues from it', () => {
+    // The joint cell belongs to both spans and must appear once, or `cellDist` stops being
+    // strictly increasing — which `edgeIndexAt` and `cellStartArc` both divide by.
+    const r = buildRoute(route([
+      carried({ exitCell: { gx: 4, gy: 0 } }),
+      { kind: 'grid', cells: roadCells(4, 6) },
+    ]))!;
+    expect(r.cells).toEqual([{ gx: 4, gy: 0 }, { gx: 5, gy: 0 }, { gx: 6, gy: 0 }]);
+    for (let i = 1; i < r.cellDist.length; i++) {
+      expect(r.cellDist[i], `cellDist[${i}]`).toBeGreaterThan(r.cellDist[i - 1]);
+    }
+  });
+
+  it('still refuses a cell a grid span already recorded', () => {
+    // The mirror of the case above: a crossing whose entry cell is the joint a preceding
+    // grid span already ends on. One entry, and the arcs stay ordered.
+    const r = buildRoute(route([
+      { kind: 'grid', cells: roadCells(0, 2) },
+      { ...highway(centreX(2), centreX(6)) as Extract<RouteSpan, { kind: 'highway' }>, entryCell: { gx: 2, gy: 0 } },
+    ]))!;
+    expect(r.cells).toEqual([{ gx: 0, gy: 0 }, { gx: 1, gy: 0 }, { gx: 2, gy: 0 }]);
+    for (let i = 1; i < r.cellDist.length; i++) {
+      expect(r.cellDist[i], `cellDist[${i}]`).toBeGreaterThan(r.cellDist[i - 1]);
+    }
+  });
+});
+
 describe('sampleRoute', () => {
   it('samples the start at arc 0 and the end at arc length', () => {
     const r = buildRoute(straightRoad(4))!;
