@@ -94,7 +94,7 @@ function elbow(id: string, arm: number): RouteInput {
 function car(id: string, routeId: string, arc: number, speed: number): Vehicle {
   return {
     id, routeId, arcDistance: arc, speed, mode: VehicleMode.Driving,
-    lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0,
+    lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0, arrivedReported: false,
   };
 }
 

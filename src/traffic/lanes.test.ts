@@ -116,6 +116,7 @@ function vehicle(
     lastAcceleration: 0,
     arrivalTime: 0,
     distanceThisTick: 0,
+    arrivedReported: false,
   };
 }
 

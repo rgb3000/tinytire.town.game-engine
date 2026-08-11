@@ -1419,11 +1419,154 @@ describe('TrafficAdapter.getCurrentCell', () => {
     expect(adapter.getCurrentCell(car)).toEqual({ gx: 2, gy: 0 });
   });
 
+  it('never names a cell ahead of the car, past the midpoint', () => {
+    // The contract. Every caller paths from this cell and hands the result to
+    // `installRoute(…, true)`, whose projection clamps: a car before the new route's start
+    // lands at arc 0, which is free travel forward. Naming the *nearest* centre gives a cell
+    // in front for the whole far half of every cell.
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    placeAt(adapter, car, gridPath(6), 2.7 * TILE);
+
+    // Premise: the car is past cell 2's centre and past the midpoint to cell 3, which is
+    // where "nearest" and "at or behind" disagree.
+    expect(adapter.getArc(car)).toBeCloseTo(2.7 * TILE, 3);
+    expect(adapter.getCurrentCell(car)).toEqual({ gx: 2, gy: 0 });
+  });
+
   it('has no answer for a car it holds no route for', () => {
     const grid = new Grid(20, 5);
     roadRow(grid, 6);
     const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
     expect(adapter.getCurrentCell(makeCar())).toBeNull();
+  });
+});
+
+describe('TrafficAdapter reroute anchoring', () => {
+  /**
+   * Reroute a car the way `CarRouter.rerouteCar` does: path from the cell the adapter names,
+   * with the real pathfinder, and reinstall preserving position.
+   *
+   * Every `preservePosition` test written before this one reinstalled the *identical*
+   * geometry, which is the one shape no production caller produces — all of them path from
+   * `getCarCurrentTile`, so the new route begins wherever the car currently is and not
+   * wherever the old route began. Identical geometry makes the projection a fixed point and
+   * hides any error in the start cell completely.
+   */
+  function reroute(
+    adapter: TrafficAdapter, pathfinder: Pathfinder, car: Car, dest: GridPos,
+  ): { moved: number; cells: GridPos[] } {
+    adapter.writeBack([car]);
+    const before = { x: car.pixelPos.x, y: car.pixelPos.y };
+    const from = adapter.getCurrentCell(car);
+    if (from === null) throw new Error('fixture: no current cell');
+    const path = pathfinder.findPath(from, dest);
+    if (path === null) throw new Error('fixture: no path from the current cell');
+    if (!adapter.installRoute(car, path, true)) throw new Error('fixture: route refused');
+    adapter.writeBack([car]);
+    return {
+      moved: Math.hypot(car.pixelPos.x - before.x, car.pixelPos.y - before.y),
+      cells: adapter.getRouteFor(car)!.cells,
+    };
+  }
+
+  it('does not carry a car forward when it reroutes mid-crossing', () => {
+    // Measured before the fix: 82px of free travel over water, the remainder of the crossing
+    // skipped, and no fuel charged for any of it — fuel is billed from `distanceThisTick`,
+    // and a written arc bills nothing. The cause was `getCurrentCell` answering with the
+    // nearest cell centre, which past a crossing's midpoint is the off-ramp: a cell ahead of
+    // the car, so the new route began in front of it and the clamped projection pinned it to
+    // arc 0.
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    for (const gx of [0, 1, 2, 10, 11]) roads.placeRoad(gx, 0);
+    roads.connectRoads(0, 0, 1, 0);
+    roads.connectRoads(1, 0, 2, 0);
+    roads.connectRoads(10, 0, 11, 0);
+    grid.recomputeIntersectionFlags();
+    const highways = new HighwaySystem();
+    const { cp1, cp2 } = defaultControlPoints({ gx: 2, gy: 0 }, { gx: 10, gy: 0 });
+    const hw = highways.addHighway({ gx: 2, gy: 0 }, { gx: 10, gy: 0 }, cp1, cp2);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, highways);
+    const pathfinder = new Pathfinder(grid, DEFAULT_GAME_CONSTANTS, highways);
+
+    const path: PathStep[] = [
+      ...rowPath(0, 2, 0),
+      { kind: 'highway', highwayId: hw.id, from: { gx: 2, gy: 0 }, to: { gx: 10, gy: 0 } },
+      ...rowPath(10, 11, 0),
+    ];
+    const car = makeCar();
+    const midCrossing = 2 * TILE + hw.arcLength * 0.75;
+    placeAt(adapter, car, path, midCrossing);
+
+    // Premise: the car really is three quarters of the way across, so the two rules for
+    // naming its cell disagree — and disagree by most of a crossing rather than most of a tile.
+    expect(adapter.getArc(car)).toBeCloseTo(midCrossing, 3);
+    expect(adapter.getCurrentCell(car)).toEqual({ gx: 2, gy: 0 });
+
+    const { moved } = reroute(adapter, pathfinder, car, { gx: 11, gy: 0 });
+    expect(moved).toBeLessThan(1);
+    // And it is still on the crossing with the far quarter of it left to drive, rather than
+    // standing on the off-ramp with the water behind it.
+    expect(adapter.getArc(car)).toBeGreaterThan(hw.arcLength * 0.5);
+    expect(adapter.getDistanceThisTick(car)).toBe(0);
+  });
+
+  it('does not nudge a car forward when it reroutes onto a different route', () => {
+    // The same mechanism at grid scale: half a tile per reroute, measured at 11.70px. Invisible
+    // to every earlier `preservePosition` test because they all reinstalled the same geometry.
+    const { grid } = crossGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const pathfinder = new Pathfinder(grid, DEFAULT_GAME_CONSTANTS);
+
+    const car = makeCar();
+    placeAt(adapter, car, rowPath(0, 11, 5), 2.7 * TILE);
+    const cellsBefore = adapter.getRouteFor(car)!.cells.map(c => `${c.gx},${c.gy}`);
+
+    const { moved, cells } = reroute(adapter, pathfinder, car, { gx: 5, gy: 11 });
+
+    // Premise: the new route really is a different one, or this is the fixed-point case again.
+    const cellsAfter = cells.map(c => `${c.gx},${c.gy}`);
+    expect(cellsAfter).not.toEqual(cellsBefore);
+    expect(cellsAfter).toContain('5,11');
+    expect(moved).toBeLessThan(1);
+  });
+
+  it('still reports an arrival for a car rerouted into the last half-tile of its route', () => {
+    // `Arrived` used to be a rising edge on `arcDistance`, and `installRoute` writes the arc
+    // rather than driving over it — so a car whose first arc on its new route was already past
+    // the threshold had no edge to offer and could never arrive. It is one tile from home that
+    // makes this reachable: the route is two cells, the arrival arc is half a tile, and a car
+    // more than half a tile along it starts past its own destination test. Nothing would then
+    // despawn or park it, so it would block the road for the rest of the session with the
+    // watchdog reporting it every twelve seconds for ever.
+    const grid = new Grid(20, 5);
+    roadRow(grid, 8);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    placeAt(adapter, car, gridPath(8), 5.75 * TILE);
+
+    const from = adapter.getCurrentCell(car)!;
+    expect(from).toEqual({ gx: 5, gy: 0 });
+    const shortHop = rowPath(5, 6, 0);
+    expect(adapter.installRoute(car, shortHop, true)).toBe(true);
+
+    const route = adapter.getRouteFor(car)!;
+    // Premise: the car is placed past the arrival arc of its new route, which is the only
+    // regime where a latch and an edge differ.
+    expect(route.length).toBeCloseTo(TILE, 3);
+    expect(adapter.getArc(car)).toBeGreaterThan(route.length - TILE / 2);
+
+    const events = adapter.update(DT);
+    expect(events.filter(e => e.kind === TrafficEventKind.Arrived).map(e => e.vehicleId)).toEqual([car.id]);
+    // And exactly once, however long it then sits there.
+    let more = 0;
+    for (let i = 0; i < 60; i++) {
+      more += adapter.update(DT).filter(e => e.kind === TrafficEventKind.Arrived).length;
+    }
+    expect(more).toBe(0);
   });
 });
 

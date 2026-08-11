@@ -117,6 +117,20 @@ export interface Vehicle {
    * event objects every frame — events are reserved for things that actually happen.
    */
   distanceThisTick: number;
+  /**
+   * Whether `Arrived` has already been reported for the route this vehicle is on.
+   *
+   * A latch rather than an edge on `arcDistance`, and the difference only shows for a
+   * vehicle that is *placed* past the arrival arc rather than driving over it. `arcDistance`
+   * never decreases within a route, so for a driving vehicle the two are the same test; but
+   * `installRoute` writes the arc directly, and an edge cannot fire for a car whose very
+   * first arc on the route is already past the threshold. That car would sit at its
+   * destination for ever with nothing able to pass it — the exact failure `Arrived` exists to
+   * prevent — while the caller waited for an event that had already been missed.
+   *
+   * Cleared by whoever installs the route, because a new route is a new journey to arrive at.
+   */
+  arrivedReported: boolean;
 }
 
 export interface TrafficWorld {

@@ -374,8 +374,13 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     }
 
     v.distanceThisTick = v.arcDistance - before;
-    // An edge rather than a level: `arcDistance` never decreases, so a vehicle crosses the
-    // arrival arc exactly once however many ticks it then spends sitting on the far side.
+    // Once per route, latched on the vehicle rather than inferred from the arc it held last
+    // tick. `arcDistance` never decreases within a route, so for a vehicle that *drives* over
+    // the threshold a rising edge and a latch fire on the same tick; they part company for a
+    // vehicle whose first arc on the route is already past it. `installRoute` writes the arc
+    // directly, so a reroute that lands a car inside the last half-tile of its new route had
+    // no edge to offer — and a car that never reports arrival is never despawned or parked,
+    // which is an immovable obstacle plus a watchdog firing on it for the rest of the session.
     //
     // The `route.length / 2` floor keeps the arrival arc strictly inside the route, and in
     // its far half, however short the route is. A grid span is at least two cells and so at
@@ -384,7 +389,8 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     // and at 20px or less it would land at or behind zero, where the edge test can never
     // fire at all.
     const arrivalArc = route.length - Math.min(ARRIVAL_SLACK, route.length / 2);
-    if (v.arcDistance >= arrivalArc && before < arrivalArc) {
+    if (v.arcDistance >= arrivalArc && !v.arrivedReported) {
+      v.arrivedReported = true;
       events.push({ kind: TrafficEventKind.Arrived, vehicleId: v.id });
     }
   }

@@ -79,6 +79,15 @@ export class TrafficAdapter {
    * where it is. The old `reassignPath` computed the same projection but wrote it to a
    * field the renderer ignored, which is why reroutes made cars jump.
    *
+   * **`preservePosition` has a precondition: the path must begin at or behind the car.**
+   * `projectOntoRoute` clamps to each segment's extent, so a car sitting *before* the new
+   * route's first point does not project behind it — it lands at arc 0, which is a teleport
+   * forward paying no time and, since fuel is billed from `distanceThisTick`, no fuel. The
+   * precondition is not a request of the caller: {@link TrafficAdapter.getCurrentCell} is
+   * where every reroute path starts, and it answers with a cell the car has already reached
+   * the centre of, which discharges the precondition by construction. It is stated here so
+   * that a future caller sourcing a start tile from anywhere else knows what it owes.
+   *
    * The position projected is the one the *simulation* holds — `sampleRoute` of the old
    * route at the old arc — and not `car.pixelPos`. They are the same number whenever
    * `writeBack` has run since the last `update`, and `car.pixelPos` is a tick stale
@@ -125,7 +134,7 @@ export class TrafficAdapter {
       vehicle = {
         id: car.id, routeId: route.id, arcDistance: 0, speed: 0,
         mode: VehicleMode.Driving, lastAcceleration: 0, arrivalTime: 0,
-        distanceThisTick: 0,
+        distanceThisTick: 0, arrivedReported: false,
       };
       this.vehiclesByCar.set(car.id, vehicle);
       this.world.vehicles.push(vehicle);
@@ -133,6 +142,10 @@ export class TrafficAdapter {
 
     vehicle.routeId = route.id;
     vehicle.mode = VehicleMode.Driving;
+    // A new route is a new journey to arrive at, whether or not the position carries over.
+    // A reroute may land the car inside the last half-tile of its new route — one tile from
+    // home is the common case — and the latch is what lets the arrival still be reported.
+    vehicle.arrivedReported = false;
     vehicle.arcDistance = preservePosition ? projectOntoRoute(anchor, route) : 0;
     if (!preservePosition) {
       vehicle.speed = 0;
@@ -273,20 +286,37 @@ export class TrafficAdapter {
   }
 
   /**
-   * The grid cell this car is standing on, or null when the simulation holds no route for it.
+   * The last grid cell this car has reached the centre of, or null when the simulation holds
+   * no route for it.
    *
-   * Nearest cell centre by arc, which is what `CarRouter.getCarCurrentTile` computed from
-   * `segmentProgress >= 0.5 ? next : current` — the same rule, read off the one position
-   * that now exists instead of off a second representation of it.
+   * **At or behind the car, never ahead of it**, and that is the whole of the contract. The
+   * one thing every caller does with this cell is path from it and hand the result to
+   * `installRoute(…, true)`, whose projection clamps to the new route's extent: a car
+   * positioned *before* the new route's start does not project behind it, it lands at arc 0.
+   * So a start cell ahead of the car is free travel — the car is teleported forward to it,
+   * paying no time and, because fuel is billed from `distanceThisTick`, no fuel.
    *
-   * Two callers, and they want it for opposite reasons. `rerouteCar` needs a cell the
-   * pathfinder can start from; the junction guard needs to know whether that cell is an
-   * intersection. Both are satisfied by a cell the route actually visits, which is why this
-   * answers from `route.cells` and not from `pixelToGrid(car.pixelPos)`: a car halfway
-   * across a highway is over water, and rounding its pixels yields a cell no path can leave.
-   * The nearest *route* cell there is the on- or off-ramp, which is a road.
+   * It used to answer with the *nearest* cell centre, reproducing what
+   * `CarRouter.getCarCurrentTile` computed from `segmentProgress >= 0.5 ? next : current`.
+   * Past a cell's midpoint that names the cell in front, which on the grid is a nudge of up
+   * to half a tile (measured 11.70px per reroute) and across a highway is the whole far half
+   * of the crossing: measured at 82px of free travel over water, the remainder of the
+   * crossing skipped and unbilled. Flooring cannot produce that, because a cell whose centre
+   * the car has already passed is behind it by construction. The cost is that the pathfinder
+   * may be asked to start up to a full tile behind the car instead of half — and a route
+   * starting behind the car is exactly what projection handles correctly.
    *
-   * `cellDist` is strictly increasing, so the scan stops as soon as the gap starts widening.
+   * It answers from `route.cells` and not from `pixelToGrid(car.pixelPos)` because a car
+   * halfway across a highway is over water, and rounding its pixels yields a cell no path can
+   * leave. The cell behind it there is the on-ramp, which is a road.
+   *
+   * `CarRouter.rerouteCar` also uses this to skip a car standing in a junction. Flooring
+   * widens the skip forward by half a cell rather than narrowing it: the window it names a
+   * junction over is `[centre, next centre)` instead of `[entry midpoint, exit midpoint)`, so
+   * a car in the *first* half of a junction box is now rerouted — and its new route begins on
+   * the cell before the junction, which puts the junction in second place where it keeps its
+   * kind and is properly reserved. That is strictly better than the route beginning on the
+   * junction cell, which is the shape the skip exists to avoid.
    */
   getCurrentCell(car: Car): GridPos | null {
     const vehicle = this.vehiclesByCar.get(car.id);
@@ -294,12 +324,9 @@ export class TrafficAdapter {
     const route = this.world.routes.get(vehicle.routeId);
     if (!route || route.cells.length === 0) return null;
 
+    // `cellDist` is strictly increasing, so the last one at or behind the arc is the answer.
     let best = 0;
-    let bestDelta = Math.abs(route.cellDist[0] - vehicle.arcDistance);
-    for (let i = 1; i < route.cells.length; i++) {
-      const delta = Math.abs(route.cellDist[i] - vehicle.arcDistance);
-      if (delta > bestDelta) break;
-      bestDelta = delta;
+    for (let i = 1; i < route.cells.length && route.cellDist[i] <= vehicle.arcDistance; i++) {
       best = i;
     }
     return route.cells[best];

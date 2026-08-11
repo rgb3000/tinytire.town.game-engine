@@ -69,7 +69,7 @@ function road(id: string, n: number): RouteInput {
 function vehicle(
   id: string, arc: number, speed = 0, mode: VehicleMode = VehicleMode.Driving,
 ): Vehicle {
-  return { id, routeId: 'r1', arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0 };
+  return { id, routeId: 'r1', arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0, arrivedReported: false };
 }
 
 function world(n: number, ...vehicles: Vehicle[]): TrafficWorld {
@@ -97,7 +97,7 @@ function span(id: string, cells: [number, number, SegmentKind][]): RouteInput {
 function car(
   id: string, routeId: string, arc: number, speed = 0, mode: VehicleMode = VehicleMode.Driving,
 ): Vehicle {
-  return { id, routeId, arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0 };
+  return { id, routeId, arcDistance: arc, speed, mode, lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0, arrivedReported: false };
 }
 
 function addRoute(w: TrafficWorld, input: RouteInput): void {

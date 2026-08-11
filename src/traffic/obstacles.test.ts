@@ -92,7 +92,7 @@ function vehicle(
 ): Vehicle {
   return {
     id, routeId: 'r1', arcDistance: arc, speed, mode,
-    lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0,
+    lastAcceleration: 0, arrivalTime: 0, distanceThisTick: 0, arrivedReported: false,
   };
 }
 
