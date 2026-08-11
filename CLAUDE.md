@@ -99,10 +99,13 @@ game hands it routes and reads positions back; it knows nothing about houses, ca
 score. `src/systems/car/TrafficAdapter.ts` is the only translator between the two, and
 `src/traffic/index.ts` is an internal barrel that `src/index.ts` does not re-export.
 
-A car's position is **one number** — `arcDistance` along a single route curve — and
-`pixelPos`, heading and elevation are derived from it every frame, never written
-independently. That single source of truth is what makes position jumps impossible: there is
-no second representation to drift out of agreement with the first.
+A car's position is **one number** — `arcDistance` along a single route curve. While the
+simulation is driving a car, `pixelPos`, heading and elevation are derived from that number
+every frame by `TrafficAdapter.writeBack` and never written independently, which is what
+makes position jumps impossible: there is no second representation to drift out of agreement
+with the first. A car the simulation is *not* driving has no arc distance to derive from, so
+the game side parks its `pixelPos` on a tile centre directly (`Car`'s constructor and
+`resetToIdle`, and `CarDispatcher` when it stations a car at its house).
 
 A route spans road and highway alike; segment kind affects only the speed limit and, for
 highway, an elevation profile. So there is no separate highway integrator and no splice at
@@ -114,7 +117,13 @@ Three properties are worth knowing, because none is visible from any one file:
   two cars converging on a cell from different approaches are invisible to each other as
   leader and follower — but a merge implies three or more connections at that cell, which
   makes it an intersection, and junction admission serialises them there. Neither mechanism
-  is complete alone; together they leave no gap.
+  is complete alone. Together they leave **one** gap, and it is deliberate: a route that
+  *begins* inside a junction cell has no approach to yield on and no entry direction, so
+  `step.ts` offers no candidate for it and imposes no stop line, and the vehicle crosses
+  unregulated. `TrafficAdapter.describeCell` strips `SegmentKind.Intersection` on a span
+  start for the same reason. Both sites say so. It is bounded — one cell, at the start of a
+  route only — and consistent, so it cannot strand anybody; do not assume the coverage is
+  total when deciding whether some new path needs regulating.
 - **Junction admission is greedy over a total order**, which is why it cannot deadlock and
   needs no escape timeout. *Rechts vor links* shapes the order but cannot cycle it. The old
   model's `INTERSECTION_DEADLOCK_TIMEOUT` and `UNIVERSAL_STUCK_TIMEOUT` existed to break

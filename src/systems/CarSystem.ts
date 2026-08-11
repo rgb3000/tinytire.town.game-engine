@@ -18,24 +18,6 @@ import type { HighwaySystem } from './HighwaySystem';
 import type { GasStationSystem } from './GasStationSystem';
 
 /**
- * The game half of the car simulation.
- *
- * Everything about *where a car is* now lives in `src/traffic/`, reached through
- * {@link TrafficAdapter}. What stays here is everything the simulation must not learn:
- * fuel, score, which building a car is going to, and what "arrived" means.
- *
- * The tick has a fixed shape, and each part of it is load-bearing:
- *
- * 1. **Dispatch**, before anything moves, so a car spawned this frame is simulated this
- *    frame rather than standing still for one.
- * 2. **One `adapter.update(dt)`**, before anything reads a position. The simulation rebuilds
- *    its lane index once per call; asking it per vehicle would be quadratic.
- * 3. **One pass over the cars**, for the game rules that follow from how far each moved.
- * 4. **Arrivals last.** `handleArrival` may reset a car to idle or install a new route, and
- *    doing that inside step 3 would have the fuel deduction bill a car for a route it had
- *    already left.
- */
-/**
  * What the traffic simulation currently holds for one car, copied out for display.
  *
  * Public — see {@link CarSystem.inspect}, which is the only thing that produces one and the
@@ -56,6 +38,24 @@ export interface CarInspection {
   stalledSeconds: number;
 }
 
+/**
+ * The game half of the car simulation.
+ *
+ * Everything about *where a car is* now lives in `src/traffic/`, reached through
+ * {@link TrafficAdapter}. What stays here is everything the simulation must not learn:
+ * fuel, score, which building a car is going to, and what "arrived" means.
+ *
+ * The tick has a fixed shape, and each part of it is load-bearing:
+ *
+ * 1. **Dispatch**, before anything moves, so a car spawned this frame is simulated this
+ *    frame rather than standing still for one.
+ * 2. **One `adapter.update(dt)`**, before anything reads a position. The simulation rebuilds
+ *    its lane index once per call; asking it per vehicle would be quadratic.
+ * 3. **One pass over the cars**, for the game rules that follow from how far each moved.
+ * 4. **Arrivals last.** `handleArrival` may reset a car to idle or install a new route, and
+ *    doing that inside step 3 would have the fuel deduction bill a car for a route it had
+ *    already left.
+ */
 export class CarSystem {
   private cars: Car[] = [];
   private carsById = new Map<string, Car>();
