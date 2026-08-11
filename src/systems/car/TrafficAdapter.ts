@@ -7,9 +7,9 @@ import type { CarTuning } from './CarTuning';
 import { CellType } from '../../types';
 import type { GridPos, PixelPos } from '../../types';
 import { INTERSECTION_SPEED_MULTIPLIER, TILE_SIZE } from '../../constants';
-import { gridToPixelCenter } from '../../utils/math';
+import { gridToPixelCenter, pixelToGrid } from '../../utils/math';
 import {
-  buildRoute, sampleRoute, step, createWorld, routeCoversCell,
+  buildRoute, sampleRoute, step, createWorld, routeCoversCell, cellsBetween,
   SegmentKind, VehicleMode, TrafficEventKind,
   DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
 } from '../../traffic';
@@ -51,6 +51,8 @@ export class TrafficAdapter {
   private vehiclesByCar = new Map<string, Vehicle>();
   /** Seconds each vehicle has spent at a standstill it did not choose. See `update`. */
   private stalledFor = new Map<string, number>();
+  /** How far along `route.cells` each vehicle has been reported past. See `consumePassedCells`. */
+  private passedCells = new Map<string, number>();
   private grid: Grid;
   private cfg: CarTuning;
   private highwaySystem: HighwaySystem | null;
@@ -124,6 +126,7 @@ export class TrafficAdapter {
       vehicle.distanceThisTick = 0;
     }
     this.stalledFor.set(car.id, 0);
+    this.passedCells.set(car.id, 0);
 
     return true;
   }
@@ -133,9 +136,22 @@ export class TrafficAdapter {
     if (!vehicle) return;
     this.vehiclesByCar.delete(car.id);
     this.stalledFor.delete(car.id);
+    this.passedCells.delete(car.id);
     this.world.routes.delete(vehicle.routeId);
     const i = this.world.vehicles.indexOf(vehicle);
     if (i >= 0) this.world.vehicles.splice(i, 1);
+  }
+
+  /**
+   * Is this car standing still because it was told to, rather than because of traffic?
+   *
+   * The caller needs to tell those apart: a car in a driving state that the simulation has
+   * parked is stopped for ever, since parked vehicles are exempt from the stall watchdog and
+   * so cannot even report it. A car the simulation holds no vehicle for is not parked — it
+   * has nothing to un-park, and its remedy is a route.
+   */
+  isParked(car: Car): boolean {
+    return this.vehiclesByCar.get(car.id)?.mode === VehicleMode.Parked;
   }
 
   /** A parked car still occupies road and still blocks followers. */
@@ -235,6 +251,122 @@ export class TrafficAdapter {
 
   getArc(car: Car): number {
     return this.vehiclesByCar.get(car.id)?.arcDistance ?? 0;
+  }
+
+  /**
+   * The grid cell this car is standing on, or null when the simulation holds no route for it.
+   *
+   * Nearest cell centre by arc, which is what `CarRouter.getCarCurrentTile` computed from
+   * `segmentProgress >= 0.5 ? next : current` — the same rule, read off the one position
+   * that now exists instead of off a second representation of it.
+   *
+   * Two callers, and they want it for opposite reasons. `rerouteCar` needs a cell the
+   * pathfinder can start from; the junction guard needs to know whether that cell is an
+   * intersection. Both are satisfied by a cell the route actually visits, which is why this
+   * answers from `route.cells` and not from `pixelToGrid(car.pixelPos)`: a car halfway
+   * across a highway is over water, and rounding its pixels yields a cell no path can leave.
+   * The nearest *route* cell there is the on- or off-ramp, which is a road.
+   *
+   * `cellDist` is strictly increasing, so the scan stops as soon as the gap starts widening.
+   */
+  getCurrentCell(car: Car): GridPos | null {
+    const vehicle = this.vehiclesByCar.get(car.id);
+    if (!vehicle) return null;
+    const route = this.world.routes.get(vehicle.routeId);
+    if (!route || route.cells.length === 0) return null;
+
+    let best = 0;
+    let bestDelta = Math.abs(route.cellDist[0] - vehicle.arcDistance);
+    for (let i = 1; i < route.cells.length; i++) {
+      const delta = Math.abs(route.cellDist[i] - vehicle.arcDistance);
+      if (delta > bestDelta) break;
+      bestDelta = delta;
+      best = i;
+    }
+    return route.cells[best];
+  }
+
+  /**
+   * Is any vehicle currently standing on this grid cell?
+   *
+   * Replaces the lane-keyed occupancy map `CarSystem` rebuilt every tick and threaded
+   * through `dispatch`, whose single remaining use was refusing to spawn a car on top of
+   * another. Asked of the simulation's own positions rather than of `car.pixelPos`, because
+   * dispatch runs *before* `writeBack` and the mirror is therefore a tick stale.
+   *
+   * Coarser than what it replaces in one direction: the old key was `(gx, gy, lane)`, so two
+   * cars in opposing lanes of the same tile were distinct. Merging the lanes can only refuse
+   * a spawn the old code would have allowed, and the cost of a refusal is that the car waits
+   * one dispatch interval — the safe direction for a check whose failure mode is spawning a
+   * car inside another one.
+   */
+  isCellOccupied(gx: number, gy: number): boolean {
+    for (const vehicle of this.world.vehicles) {
+      const route = this.world.routes.get(vehicle.routeId);
+      if (!route) continue;
+      const sample = sampleRoute(route, vehicle.arcDistance);
+      const cell = pixelToGrid(sample.x, sample.y);
+      if (cell.gx === gx && cell.gy === gy) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Report each grid cell this car has driven clear of since the last call.
+   *
+   * `PendingDeletionSystem` holds, per cell marked for deletion, the set of cars still
+   * depending on it, and finalises the deletion when that set empties. A homebound car
+   * shrinks its own dependency as it drives, and the only thing that ever told the system so
+   * was one call in `CarMovement` on each `pathIndex` advance. Without a replacement, a cell
+   * a car was standing on when the player deleted it stays pending until that car reaches
+   * home — and since nothing removes a car from the set on arrival, in practice for ever.
+   *
+   * "Driven clear of" is the old rule exactly: cell *i* is behind the car once the car has
+   * reached cell *i+1*'s centre. The last cell is therefore never reported, as it never was —
+   * a journey's final cell is its destination, and a car sitting on its destination has not
+   * left it.
+   *
+   * The cursor resets whenever a route is installed, and that is correct in both directions.
+   * A fresh route puts the car at arc 0 with nothing behind it. A reroute that preserves
+   * position re-walks the cells the *new* route passes before the car's arc — cells the car
+   * did not drive, but does not have to drive either, so releasing them is exactly right.
+   */
+  consumePassedCells(car: Car, visit: (gx: number, gy: number) => void): void {
+    const vehicle = this.vehiclesByCar.get(car.id);
+    if (!vehicle) return;
+    const route = this.world.routes.get(vehicle.routeId);
+    if (!route) return;
+
+    let cursor = this.passedCells.get(car.id) ?? 0;
+    while (cursor + 1 < route.cells.length && route.cellDist[cursor + 1] <= vehicle.arcDistance) {
+      const cell = route.cells[cursor];
+      visit(cell.gx, cell.gy);
+      cursor++;
+    }
+    this.passedCells.set(car.id, cursor);
+  }
+
+  /**
+   * Does the road this car has still to drive include a cell the player has marked for
+   * deletion?
+   *
+   * Read from the grid rather than from `RouteSegment.pendingDeletion`, which is a snapshot
+   * taken when the route was built and so cannot see a cell marked since. The caller —
+   * `CarRescueManager.rerouteActiveCars` — asks precisely because the marking just happened.
+   *
+   * Cells are compared by extent, so the cell under the car counts as ahead of it: a car
+   * standing on a cell about to vanish is the case that most needs rerouting.
+   */
+  crossesPendingDeletionAhead(car: Car): boolean {
+    const vehicle = this.vehiclesByCar.get(car.id);
+    if (!vehicle) return false;
+    const route = this.world.routes.get(vehicle.routeId);
+    if (!route) return false;
+
+    for (const cell of cellsBetween(route, vehicle.arcDistance, route.length)) {
+      if (this.grid.getCell(cell.gx, cell.gy)?.pendingDeletion) return true;
+    }
+    return false;
   }
 
   /**

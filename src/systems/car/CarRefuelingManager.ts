@@ -28,8 +28,8 @@ export class CarRefuelingManager {
       return;
     }
 
-    // Car arrived at gas station tile — start refueling directly
-    car.clearPathState();
+    // Car arrived at gas station tile — start refueling directly. It keeps its route, so it
+    // keeps blocking the tile it is physically standing on; `CarSystem` parks it.
     car.state = CarState.Refueling;
     car.refuelTimer = 0;
   }
@@ -83,7 +83,6 @@ export class CarRefuelingManager {
           car.targetBusinessId = bestBiz.id;
           car.destination = bestBiz.connectorPos;
           this.router.assignPath(car, path);
-          this.router.snapToPathStart(car, path);
           return;
         }
       }
@@ -97,14 +96,12 @@ export class CarRefuelingManager {
           car.targetBusinessId = null;
           car.destination = home.pos;
           this.router.assignPath(car, homePath);
-          this.router.snapToPathStart(car, homePath);
           return;
         }
       }
     }
 
-    // If no path found, strand the car
+    // If no path found, strand the car where it stands — still parked on the station tile.
     car.state = CarState.Stranded;
-    car.clearPathState();
   }
 }

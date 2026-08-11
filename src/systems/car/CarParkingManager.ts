@@ -4,13 +4,11 @@ import type { Business } from '../../entities/Business';
 import type { House } from '../../entities/House';
 import type { Pathfinder } from '../../pathfinding/Pathfinder';
 import type { CarRouter } from './CarRouter';
-import { stepGridPos } from './CarRouter';
 import type { PendingDeletionSystem } from '../PendingDeletionSystem';
 import type { GasStationSystem } from '../GasStationSystem';
 import type { HighwaySystem } from '../HighwaySystem';
 import type { CarTuning } from './CarTuning';
 import { computePathFuelCost } from '../../pathfinding/pathCost';
-import { getDirection, directionAngle } from '../../utils/direction';
 
 export class CarParkingManager {
   private pathfinder: Pathfinder;
@@ -60,11 +58,11 @@ export class CarParkingManager {
       return;
     }
 
-    // Car arrived at connector cell — start unloading
-    car.outboundPath = [...car.path];
-    car.path = [];
-    car.pathIndex = 0;
-    car.segmentProgress = 0;
+    // Car arrived at connector cell — start unloading. It keeps its route rather than
+    // clearing it: a car sitting on a connector is physically there and still blocks the
+    // road, and the route is what `carDependsOnCell` reads to protect the road under it.
+    // `outboundPath` was the old copy of the path kept for exactly that reservation.
+    // Parking is `CarSystem`'s to do, in one place, for every arrival.
     car.state = CarState.Unloading;
     car.unloadTimer = 0;
   }
@@ -80,8 +78,8 @@ export class CarParkingManager {
     const homePath = this.pathfinder.findPath(startPos, home.pos, true);
 
     if (!homePath) {
+      // Stays parked, which it already is: it is still sitting on the connector.
       car.state = CarState.Stranded;
-      car.outboundPath = [];
       car.targetBusinessId = null;
       return;
     }
@@ -94,19 +92,16 @@ export class CarParkingManager {
         const stationPath = this.pathfinder.findPath(startPos, result.station.pos);
         if (stationPath && stationPath.length >= 2) {
           car.state = CarState.GoingToGasStation;
-          car.outboundPath = [];
           car.targetGasStationId = result.station.id;
           car.postRefuelIntent = 'home';
           car.destination = result.station.pos;
           this.router.assignPath(car, stationPath);
-          this.snapCarToSmoothStart(car, stationPath);
           return;
         }
       }
     }
 
     car.state = CarState.GoingHome;
-    car.outboundPath = [];
     car.targetBusinessId = null;
     car.destination = home.pos;
     this.router.assignPath(car, homePath);
@@ -114,23 +109,5 @@ export class CarParkingManager {
     // Notify pending deletion system
     const gridPath = homePath.filter(s => s.kind === 'grid').map(s => (s as { pos: import('../../types').GridPos }).pos);
     this.pendingDeletionSystem.notifyCarTransitionedHome(car.id, gridPath);
-
-    this.snapCarToSmoothStart(car, homePath);
-  }
-
-  private snapCarToSmoothStart(car: Car, path: import('../../highways/types').PathStep[]): void {
-    if (car.smoothPath.length >= 2) {
-      car.pixelPos.x = car.smoothPath[0].x;
-      car.pixelPos.y = car.smoothPath[0].y;
-      car.prevPixelPos.x = car.pixelPos.x;
-      car.prevPixelPos.y = car.pixelPos.y;
-      if (path.length >= 2) {
-        const p0 = stepGridPos(path[0]);
-        const p1 = stepGridPos(path[1]);
-        const initDir = getDirection(p0, p1);
-        car.renderAngle = directionAngle(initDir);
-        car.prevRenderAngle = car.renderAngle;
-      }
-    }
   }
 }

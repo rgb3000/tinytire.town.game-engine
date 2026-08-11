@@ -6,11 +6,10 @@ import type { Pathfinder } from '../../pathfinding/Pathfinder';
 import type { CarRouter } from './CarRouter';
 import { stepGridPos } from './CarRouter';
 import { manhattanDist, gridToPixelCenter } from '../../utils/math';
-import { getDirection, directionToLane } from '../../utils/direction';
-import { occupancyKey } from './CarTrafficManager';
 import { computePathFuelCost } from '../../pathfinding/pathCost';
 import type { GasStationSystem } from '../GasStationSystem';
 import type { HighwaySystem } from '../HighwaySystem';
+import type { TrafficAdapter } from './TrafficAdapter';
 import { CAR_DEBUG } from '../../constants';
 import { CarEventLog } from '../../debug/CarEventLog';
 
@@ -22,17 +21,19 @@ export class CarDispatcher {
   private _carsEnRoute = new Map<string, number>();
   private _tickCounter = 0;
 
+  private adapter: TrafficAdapter;
   private gasStationSystem: GasStationSystem | null;
   private highwaySystem: HighwaySystem | null;
 
-  constructor(pathfinder: Pathfinder, router: CarRouter, gasStationSystem?: GasStationSystem, highwaySystem?: HighwaySystem) {
+  constructor(pathfinder: Pathfinder, router: CarRouter, adapter: TrafficAdapter, gasStationSystem?: GasStationSystem, highwaySystem?: HighwaySystem) {
     this.pathfinder = pathfinder;
     this.router = router;
+    this.adapter = adapter;
     this.gasStationSystem = gasStationSystem ?? null;
     this.highwaySystem = highwaySystem ?? null;
   }
 
-  dispatch(cars: Car[], houses: House[], businesses: Business[], occupied: Map<number, string>): void {
+  dispatch(cars: Car[], houses: House[], businesses: Business[]): void {
     if (++this._tickCounter < DISPATCH_INTERVAL) return;
     this._tickCounter = 0;
 
@@ -84,13 +85,11 @@ export class CarDispatcher {
         const path = this.pathfinder.findPath(house.pos, biz.connectorPos);
         if (!path || path.length < 2) continue;
 
-        // Check if the spawn tile is already occupied
+        // Do not spawn a car inside one that is already there. Asked of the simulation,
+        // which is the only thing that knows where cars are between `writeBack`s — dispatch
+        // runs before the tick's `writeBack`, so `car.pixelPos` would be one frame stale.
         const p0 = stepGridPos(path[0]);
-        const p1 = stepGridPos(path[1]);
-        const spawnDir = getDirection(p0, p1);
-        const spawnLane = directionToLane(spawnDir);
-        const spawnKey = occupancyKey(p0.gx, p0.gy, spawnLane);
-        if (occupied.has(spawnKey)) continue;
+        if (this.adapter.isCellOccupied(p0.gx, p0.gy)) continue;
 
         // Pop an idle car from the house's idle list
         const car = idleCars.pop()!;
@@ -138,11 +137,8 @@ export class CarDispatcher {
           this.router.assignPath(car, path);
         }
 
-        this.router.snapToPathStart(car, path);
-
         if (CAR_DEBUG) CarEventLog.log({ time: 0, carId: car.id, type: 'dispatched', message: `to biz ${biz.id.slice(0, 6)} (${biz.color}), state=${car.state === CarState.GoingToGasStation ? 'GoingToGas' : 'GoingToBiz'}` });
 
-        occupied.set(spawnKey, car.id);
         carsEnRoute.set(biz.id, (carsEnRoute.get(biz.id) ?? 0) + 1);
         dispatched++;
       }
