@@ -219,25 +219,34 @@ export class CarSystem {
         }
       }
 
-      // Not merged with the loop above: `rerouteCar` can install a route, and a car whose
-      // route was replaced after it arrived must not then be told it has arrived.
+      // Arrivals after the per-car pass: `handleArrival` may reset a car to idle or install
+      // a new route, and doing that mid-loop would have the fuel pass above read a route the
+      // car has already left.
+      for (const event of events) {
+        if (event.kind !== TrafficEventKind.Arrived) continue;
+        const car = this.carsById.get(event.vehicleId);
+        if (car) this.handleArrival(car, houses, bizMap, houseMap);
+      }
+
+      // Repathing comes after arrivals, and the order is the whole of the safety argument.
+      //
+      // A car can be reported blocked on the very tick it arrives — it need only have been
+      // crawling below `STOPPED_SPEED` while the watchdog counted. Repathing it *first*
+      // would install a new route and then let `handleArrival` declare it arrived at a
+      // destination it is no longer heading for. Running arrivals first makes that
+      // impossible rather than merely unlikely: every outcome of `handleArrival` is a state
+      // this loop does not touch, so the car has already been dealt with by the time the
+      // report is read. That exhaustiveness is why the loop needs no separate "did it also
+      // arrive?" test, and it is why `handleGasStationArrival` strands a car it cannot place
+      // rather than leaving it in a driving state.
       for (const event of events) {
         if (event.kind !== TrafficEventKind.Blocked) continue;
-        if (arrived.has(event.vehicleId)) continue;
         const car = this.carsById.get(event.vehicleId);
         // The simulation cannot end a standstill it did not cause — a car parked across the
         // exit of the junction this one is queueing for may never move again. Repathing is
         // the remedy, and it needs the pathfinder, the destination and the fuel model, none
         // of which exist below this line.
         if (car && this.isDriving(car)) this.router.rerouteCar(car, houseMap);
-      }
-
-      // Arrivals last: handleArrival may reset a car to idle or install a new route, and
-      // doing that mid-loop would have the fuel pass read a route the car has already left.
-      for (const event of events) {
-        if (event.kind !== TrafficEventKind.Arrived) continue;
-        const car = this.carsById.get(event.vehicleId);
-        if (car) this.handleArrival(car, houses, bizMap, houseMap);
       }
     });
   }
@@ -308,6 +317,10 @@ export class CarSystem {
    * deliberate: the branches include two failure paths (the business is gone, the gas
    * station is gone) and `CarRouter` adds a third, and those are exactly the ones a
    * per-branch obligation gets forgotten on.
+   *
+   * Every branch below leaves the car in `Idle`, `Unloading`, `Refueling` or `Stranded` —
+   * never in a driving state. `moveCars` depends on that when it repaths blocked cars after
+   * this runs, so a new branch here that leaves a car driving needs that loop looked at too.
    */
   private handleArrival(car: Car, _houses: House[], bizMap: Map<string, Business>, houseMap: Map<string, House>): void {
     if (car.state === CarState.GoingToGasStation) {

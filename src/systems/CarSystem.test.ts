@@ -344,6 +344,22 @@ describe('CarSystem arrivals', () => {
     expect(counts.routes).toBe(0);
   });
 
+  it('leaves no arrival in a driving state, including the ones that fail', () => {
+    // What the repath-after-arrivals order rests on. A car sent to a gas station on a board
+    // with no gas stations reaches the end of its route and finds nothing there; the old
+    // code returned with the state untouched, which left it driving and blocked with no
+    // route to drive. Every arrival outcome has to be a state the blocked pass ignores.
+    const town = makeTown();
+    const car = dispatched(town);
+    car.state = CarState.GoingToGasStation;
+    car.targetGasStationId = 'no-such-station';
+
+    town.runUntil(() => car.state !== CarState.GoingToGasStation, 900);
+
+    expect(car.state).toBe(CarState.Stranded);
+    expect(town.adapter.isParked(car)).toBe(true);
+  });
+
   it('releases a homebound car from a pending cell as it drives clear of it', () => {
     // `PendingDeletionSystem` finalises a deletion when the last car depending on the cell
     // has passed. Nothing else ever tells it that has happened, so without this the road a

@@ -20,9 +20,21 @@ export class CarRefuelingManager {
     this.gasStationSystem = gasStationSystem ?? null;
   }
 
+  /**
+   * A car has reached the end of a route it was driving to a gas station.
+   *
+   * Both ways of failing to find that station strand it, including the one that used to
+   * return with the state untouched. `CarSystem` relies on every outcome here being a state
+   * a car is no longer driving in — that is what lets it repath blocked cars after arrivals
+   * without having to ask which of them arrived — and a bare `return` was the single branch
+   * that broke the property. It is not reachable today, since nothing can put a car into
+   * `GoingToGasStation` without the same `GasStationSystem` this checks for, but an
+   * invariant that holds only by reachability is one a later change silently costs.
+   */
   handleGasStationArrival(car: Car): void {
-    if (!this.gasStationSystem) return;
-    const station = car.targetGasStationId ? this.gasStationSystem.getGasStationById(car.targetGasStationId) : undefined;
+    const station = car.targetGasStationId
+      ? this.gasStationSystem?.getGasStationById(car.targetGasStationId)
+      : undefined;
     if (!station) {
       car.state = CarState.Stranded;
       return;
