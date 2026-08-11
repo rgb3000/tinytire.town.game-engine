@@ -321,6 +321,17 @@ export class CarSystem {
    * Every branch below leaves the car in `Idle`, `Unloading`, `Refueling` or `Stranded` —
    * never in a driving state. `moveCars` depends on that when it repaths blocked cars after
    * this runs, so a new branch here that leaves a car driving needs that loop looked at too.
+   *
+   * That ordering needs a second property, which holds on the other side of the tick: **the
+   * per-car pass cannot un-arrive a car.** An `Arrived` report is only meaningful against
+   * the route the car was on when the simulation stepped, so anything installing a *new*
+   * route between the report and this method would leave the report describing a journey
+   * the car is no longer making. Nothing does. A car that has just arrived necessarily has
+   * a route, which rules out `driving()`'s no-route repath; the out-of-fuel branch skips
+   * cars that arrived this tick; and `updateUnloadingCar` and `updateRefuelingCar`, the two
+   * per-car branches that do install routes, are reachable only from `Unloading` and
+   * `Refueling` — states this method is what puts a car into, so a car cannot be in one of
+   * them on the tick it arrives.
    */
   private handleArrival(car: Car, _houses: House[], bizMap: Map<string, Business>, houseMap: Map<string, House>): void {
     if (car.state === CarState.GoingToGasStation) {

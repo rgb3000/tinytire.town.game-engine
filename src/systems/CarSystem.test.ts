@@ -25,7 +25,7 @@ import { RoadSystem } from './RoadSystem';
 import { PendingDeletionSystem } from './PendingDeletionSystem';
 import { HighwaySystem } from './HighwaySystem';
 import type { TrafficAdapter } from './car/TrafficAdapter';
-import { STALL_WATCHDOG_SECONDS, STOPPED_SPEED } from '../traffic';
+import { STALL_WATCHDOG_SECONDS, STOPPED_SPEED, TrafficEventKind } from '../traffic';
 import { Pathfinder } from '../pathfinding/Pathfinder';
 import { gridToPixelCenter } from '../utils/math';
 
@@ -342,6 +342,50 @@ describe('CarSystem arrivals', () => {
     const counts = town.adapter.debugCounts();
     expect(counts.vehicles).toBe(0);
     expect(counts.routes).toBe(0);
+  });
+
+  it('does not lose a delivery when a car is reported blocked on the tick it arrives', () => {
+    // The one construction where the order of the arrivals pass and the repathing pass is
+    // observable, and it is not a curiosity: it is what happens whenever the road under a
+    // destination goes away as a car reaches it, which is the branch `CarRouter.rerouteCar`
+    // exists for. Repathing first sends the car home, `handleArrival` then takes the
+    // `GoingHome` branch and resets it to idle standing at the business, and the delivery
+    // evaporates — no unload, no score, no pin.
+    //
+    // The watchdog's twelve seconds are not what makes it reachable. A `Blocked` report is
+    // just an entry in the list the adapter returns, so injecting one through the same seam
+    // the tick-count test uses reaches the code path with no timing to arrange at all.
+    const town = makeTown();
+    const car = dispatched(town);
+    expect(car.state).toBe(CarState.GoingToBusiness);
+    expect(town.biz.demandPins).toBe(1);
+
+    const adapter = town.adapter;
+    const real = adapter.update.bind(adapter);
+    let injected = false;
+    adapter.update = (dt: number) => {
+      const events = real(dt);
+      if (injected) return events;
+      if (!events.some(e => e.kind === TrafficEventKind.Arrived && e.vehicleId === car.id)) return events;
+      injected = true;
+      // The connector goes on the tick the car reaches it, so there is no longer a route to
+      // the destination the repath would try to re-establish.
+      town.grid.clearCell(town.biz.connectorPos.gx, town.biz.connectorPos.gy);
+      town.pathfinder.clearCache();
+      events.push({ kind: TrafficEventKind.Blocked, vehicleId: car.id });
+      return events;
+    };
+
+    town.runUntil(() => injected, 900);
+    // Premise: the arrival really happened and a report really was injected alongside it.
+    expect(injected).toBe(true);
+
+    // Arrivals are settled before reports are read, so the arrival wins and the car unloads.
+    expect(car.state).toBe(CarState.Unloading);
+
+    town.tick(120);
+    expect(town.carSystem.getScore()).toBe(1);
+    expect(town.biz.demandPins).toBe(0);
   });
 
   it('leaves no arrival in a driving state, including the ones that fail', () => {
