@@ -11,7 +11,9 @@ export { step } from './step';
 // Tuning the adapter must reason about at its boundary: the safe-speed assertion needs the
 // braking model, and the stall watchdog needs the same standstill threshold the junction's
 // exit-clearance rule uses. Exported rather than duplicated so the two cannot drift.
-export { DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
+export {
+  DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
+} from './tuning';
 export { createWorld, SegmentKind, VehicleMode, TrafficEventKind } from './types';
 export type {
   Route, RouteInput, RouteSpan, RouteCellInput, RouteSample, RouteSegment,

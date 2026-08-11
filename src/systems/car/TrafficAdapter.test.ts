@@ -3,13 +3,14 @@ import { Grid } from '../../core/Grid';
 import { Car, CarState } from '../../entities/Car';
 import { TrafficAdapter } from './TrafficAdapter';
 import { CellType, GameColor } from '../../types';
-import { DEFAULT_GAME_CONSTANTS, UNIVERSAL_STUCK_TIMEOUT } from '../../constants';
+import { DEFAULT_GAME_CONSTANTS } from '../../constants';
 import type { Highway, PathStep } from '../../highways/types';
 import { RoadSystem } from '../RoadSystem';
 import { HighwaySystem } from '../HighwaySystem';
 import { defaultControlPoints } from '../../highways/highwayGeometry';
-import { sampleRoute, SegmentKind, TrafficEventKind } from '../../traffic';
+import { sampleRoute, SegmentKind, STALL_WATCHDOG_SECONDS, TrafficEventKind } from '../../traffic';
 import type { Route } from '../../traffic';
+import type { GridPos } from '../../types';
 
 function roadRow(grid: Grid, n: number): void {
   for (let i = 0; i < n; i++) {
@@ -642,7 +643,7 @@ describe('TrafficAdapter stall watchdog', () => {
     adapter.setParked(abandoned, true);
 
     const blocked: number[] = [];
-    for (let i = 0; i < 60 * 17; i++) {
+    for (let i = 0; i < 60 * 26; i++) {
       for (const event of adapter.update(DT)) {
         if (event.kind === TrafficEventKind.Blocked && event.vehicleId === queued.id) {
           blocked.push(i * DT);
@@ -653,8 +654,8 @@ describe('TrafficAdapter stall watchdog', () => {
     // Premise: it is genuinely stuck, not merely slow.
     expect(adapter.getArc(queued)).toBeLessThan(180);
     expect(blocked).toHaveLength(2);
-    expect(blocked[0]).toBeCloseTo(UNIVERSAL_STUCK_TIMEOUT, 1);
-    expect(blocked[1] - blocked[0]).toBeCloseTo(UNIVERSAL_STUCK_TIMEOUT, 1);
+    expect(blocked[0]).toBeCloseTo(STALL_WATCHDOG_SECONDS, 1);
+    expect(blocked[1] - blocked[0]).toBeCloseTo(STALL_WATCHDOG_SECONDS, 1);
     // The car that is parked on purpose is not reported: standing still is what parking is.
     expect(adapter.getStalledSeconds(abandoned)).toBe(0);
   });
@@ -674,7 +675,8 @@ describe('TrafficAdapter stall watchdog', () => {
 
     let blocked = 0;
     let arrivals = 0;
-    for (let i = 0; i < 60 * 20; i++) {
+    const seconds = 26;
+    for (let i = 0; i < 60 * seconds; i++) {
       for (const event of adapter.update(DT)) {
         if (event.kind === TrafficEventKind.Blocked) blocked++;
         if (event.kind === TrafficEventKind.Arrived) { arrivals++; adapter.removeVehicle(cars.find(c => c.id === event.vehicleId)!); }
@@ -682,7 +684,7 @@ describe('TrafficAdapter stall watchdog', () => {
     }
 
     // Premise: the run was long enough that a false positive had time to fire twice.
-    expect(20).toBeGreaterThan(2 * UNIVERSAL_STUCK_TIMEOUT);
+    expect(seconds).toBeGreaterThan(2 * STALL_WATCHDOG_SECONDS);
     expect(arrivals).toBe(3);
     expect(blocked).toBe(0);
   });
@@ -928,7 +930,7 @@ describe('TrafficAdapter watchdog reset', () => {
     placeAt(adapter, abandoned, path, 240);
     adapter.setParked(abandoned, true);
 
-    const rerouteAfter = Math.round(60 * (UNIVERSAL_STUCK_TIMEOUT - 1));
+    const rerouteAfter = Math.round(60 * (STALL_WATCHDOG_SECONDS - 1));
     let blockedBeforeReroute = 0;
     for (let i = 0; i < rerouteAfter; i++) {
       for (const event of adapter.update(DT)) {
@@ -938,7 +940,7 @@ describe('TrafficAdapter watchdog reset', () => {
     // Premise: it is one second short of the threshold, so a surviving counter would fire
     // almost at once and a reset one would not fire for another eight seconds.
     expect(blockedBeforeReroute).toBe(0);
-    expect(adapter.getStalledSeconds(queued)).toBeCloseTo(UNIVERSAL_STUCK_TIMEOUT - 1, 1);
+    expect(adapter.getStalledSeconds(queued)).toBeCloseTo(STALL_WATCHDOG_SECONDS - 1, 1);
 
     adapter.installRoute(queued, path, true);
     expect(adapter.getStalledSeconds(queued)).toBe(0);
@@ -1016,5 +1018,160 @@ describe('TrafficAdapter refusals', () => {
       { kind: 'grid', pos: { gx: 3, gy: 1 } },
     ];
     expect(adapter.installRoute(makeCar(), path, false)).toBe(false);
+  });
+});
+
+describe('TrafficAdapter watchdog threshold', () => {
+  it('does not fire during a congested stall that resolves itself', () => {
+    // The bound that makes the threshold defensible from below. Task 8 measured a 9.65s
+    // stall on a loaded nine-junction city that went on to clear normally, so a stall of
+    // that length must pass in silence — a watchdog firing on healthy congestion trains its
+    // consumer to ignore it, which is worse than no watchdog because it reads as coverage.
+    // The predecessor constant was 8s and would have fired here.
+    const { grid } = crossGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const path = rowPath(0, 11, 5);
+    const queued = makeCar();
+    const obstruction = makeCar();
+    placeAt(adapter, queued, path, 170);
+    placeAt(adapter, obstruction, path, 240);
+    adapter.setParked(obstruction, true);
+
+    const clearsAt = 9.7;
+    let blocked = 0;
+    for (let i = 0; i < Math.round(60 * clearsAt); i++) {
+      for (const event of adapter.update(DT)) {
+        if (event.kind === TrafficEventKind.Blocked) blocked++;
+      }
+    }
+
+    // Premises: the car really did stand still for the whole 9.7s, and the stall it endured
+    // is the one Task 8 measured rather than an arbitrary number.
+    expect(adapter.getStalledSeconds(queued)).toBeCloseTo(clearsAt, 1);
+    expect(adapter.getStalledSeconds(queued)).toBeGreaterThan(9);
+    expect(adapter.getStalledSeconds(queued)).toBeLessThan(10);
+    expect(adapter.getArc(queued)).toBeLessThan(180);
+    expect(blocked).toBe(0);
+
+    // And it was congestion, not a defect: once the obstruction moves off, so does it.
+    adapter.setParked(obstruction, false);
+    for (let i = 0; i < 60 * 8; i++) {
+      for (const event of adapter.update(DT)) {
+        if (event.kind === TrafficEventKind.Blocked) blocked++;
+      }
+    }
+    expect(adapter.getArc(queued)).toBeGreaterThan(180);
+    expect(blocked).toBe(0);
+  });
+
+  it('sits between the two measurements that bracket it', () => {
+    // Stated as numbers so that moving the constant without moving the argument fails here.
+    expect(STALL_WATCHDOG_SECONDS).toBeGreaterThan(9.65);
+    expect(STALL_WATCHDOG_SECONDS).toBeLessThan(15);
+  });
+});
+
+describe('TrafficAdapter fold safety', () => {
+  /**
+   * Two crossings meeting at a single road cell, plus grid road either side.
+   *
+   * `(10,0)` is the endpoint of both highways and the only cell between them, so it is the
+   * lone run that gets folded. This is the shape a review probe was mid-way through when it
+   * died, and nothing else in the file covers it.
+   */
+  function twoCrossings(): { adapter: TrafficAdapter; path: PathStep[]; hwLength: number } {
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    for (const gx of [0, 1, 2, 10, 18, 19]) roads.placeRoad(gx, 0);
+    roads.connectRoads(0, 0, 1, 0);
+    roads.connectRoads(1, 0, 2, 0);
+    roads.connectRoads(18, 0, 19, 0);
+    grid.recomputeIntersectionFlags();
+
+    const highways = new HighwaySystem();
+    const first = defaultControlPoints({ gx: 2, gy: 0 }, { gx: 10, gy: 0 });
+    const hw1 = highways.addHighway({ gx: 2, gy: 0 }, { gx: 10, gy: 0 }, first.cp1, first.cp2);
+    const second = defaultControlPoints({ gx: 10, gy: 0 }, { gx: 18, gy: 0 });
+    const hw2 = highways.addHighway({ gx: 10, gy: 0 }, { gx: 18, gy: 0 }, second.cp1, second.cp2);
+
+    const path: PathStep[] = [
+      ...rowPath(0, 2, 0),
+      { kind: 'highway', highwayId: hw1.id, from: { gx: 2, gy: 0 }, to: { gx: 10, gy: 0 } },
+      { kind: 'grid', pos: { gx: 10, gy: 0 } },
+      { kind: 'highway', highwayId: hw2.id, from: { gx: 10, gy: 0 }, to: { gx: 18, gy: 0 } },
+      ...rowPath(18, 19, 0),
+    ];
+    return {
+      adapter: new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, highways),
+      path,
+      hwLength: hw1.arcLength + hw2.arcLength,
+    };
+  }
+
+  it('routes a path with one road cell between two crossings', () => {
+    const { adapter, path, hwLength } = twoCrossings();
+    const car = makeCar();
+    expect(adapter.installRoute(car, path, false)).toBe(true);
+    const route = adapter.getRouteFor(car)!;
+
+    // Not truncated and no phantom absorbed at any of the four joints.
+    expect(Math.abs(route.length - (2 * TILE + hwLength + TILE))).toBeLessThan(2);
+    expect(route.cells).toEqual([
+      { gx: 0, gy: 0 }, { gx: 1, gy: 0 }, { gx: 2, gy: 0 }, { gx: 18, gy: 0 }, { gx: 19, gy: 0 },
+    ]);
+  });
+
+  it('omits only highway endpoints from route.cells, in every shape that folds', () => {
+    // This is the premise the fold's safety rests on. A folded cell is invisible to
+    // `carDependsOnCell`, so the player's road-delete check cannot protect it — but
+    // `Game.handleTryErase` erases every highway with an endpoint at the clicked cell
+    // *before* it can reach the road-removal branch, so the click that would exercise the
+    // gap destroys the crossing the car is riding in the same gesture, and the route is
+    // invalidated by the larger event regardless. That argument holds only while every
+    // omitted cell is a highway endpoint. If a future path shape folds an ordinary road
+    // cell, this fails and the argument must be redone.
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    for (const gx of [0, 1, 2, 10, 11]) roads.placeRoad(gx, 0);
+    roads.connectRoads(0, 0, 1, 0);
+    roads.connectRoads(1, 0, 2, 0);
+    roads.connectRoads(10, 0, 11, 0);
+    grid.recomputeIntersectionFlags();
+    const highways = new HighwaySystem();
+    const { cp1, cp2 } = defaultControlPoints({ gx: 2, gy: 0 }, { gx: 10, gy: 0 });
+    const hw = highways.addHighway({ gx: 2, gy: 0 }, { gx: 10, gy: 0 }, cp1, cp2);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, highways);
+    const crossing: PathStep = { kind: 'highway', highwayId: hw.id, from: { gx: 2, gy: 0 }, to: { gx: 10, gy: 0 } };
+
+    const shapes: { name: string; adapter: TrafficAdapter; path: PathStep[] }[] = [
+      // Destination sitting at a highway exit.
+      { name: 'trailing', adapter, path: [...rowPath(0, 2, 0), crossing, { kind: 'grid', pos: { gx: 10, gy: 0 } }] },
+      // Origin sitting at a highway entrance.
+      { name: 'leading', adapter, path: [{ kind: 'grid', pos: { gx: 2, gy: 0 } }, crossing, ...rowPath(10, 11, 0)] },
+      // One road cell between two crossings.
+      { name: 'between', ...twoCrossings() },
+    ];
+
+    for (const shape of shapes) {
+      const car = makeCar();
+      expect(shape.adapter.installRoute(car, shape.path, false)).toBe(true);
+      const route = shape.adapter.getRouteFor(car)!;
+
+      const endpoints = new Set<string>();
+      for (const step of shape.path) {
+        if (step.kind !== 'highway') continue;
+        endpoints.add(`${step.from.gx},${step.from.gy}`);
+        endpoints.add(`${step.to.gx},${step.to.gy}`);
+      }
+      const kept = new Set(route.cells.map(c => `${c.gx},${c.gy}`));
+      const omitted = shape.path
+        .filter(s => s.kind === 'grid')
+        .map(s => `${(s as { pos: GridPos }).pos.gx},${(s as { pos: GridPos }).pos.gy}`)
+        .filter(key => !kept.has(key));
+
+      // Premise: this shape really does fold something, or the assertion below is vacuous.
+      expect(omitted.length, shape.name).toBeGreaterThan(0);
+      for (const key of omitted) expect(endpoints.has(key), `${shape.name} omitted ${key}`).toBe(true);
+    }
   });
 });

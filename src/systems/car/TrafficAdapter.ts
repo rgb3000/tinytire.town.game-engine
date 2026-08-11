@@ -6,14 +6,12 @@ import type { HighwaySystem } from '../HighwaySystem';
 import type { CarTuning } from './CarTuning';
 import { CellType } from '../../types';
 import type { GridPos, PixelPos } from '../../types';
-import {
-  INTERSECTION_SPEED_MULTIPLIER, TILE_SIZE, UNIVERSAL_STUCK_TIMEOUT,
-} from '../../constants';
+import { INTERSECTION_SPEED_MULTIPLIER, TILE_SIZE } from '../../constants';
 import { gridToPixelCenter } from '../../utils/math';
 import {
   buildRoute, sampleRoute, step, createWorld, routeCoversCell,
   SegmentKind, VehicleMode, TrafficEventKind,
-  DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STOPPED_SPEED,
+  DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
 } from '../../traffic';
 import type {
   Route, RouteCellInput, RouteSpan, TrafficEvent, TrafficWorld, Vehicle,
@@ -171,13 +169,12 @@ export class TrafficAdapter {
    * this line can perform the remedy — repathing needs the pathfinder, the fuel model and
    * the destination — the adapter measures and the caller acts.
    *
-   * Threshold is `UNIVERSAL_STUCK_TIMEOUT`, the same eight seconds the old `CarMovement`
-   * used, so the game's existing notion of "stuck" is unchanged. It is above anything the
-   * junction model produces on a board that can clear its load (9.65s was the worst stall
-   * measured on a loaded nine-junction city, which does exceed it) and well below the
-   * indefinite wait behind a permanent obstruction, so a false positive costs one repath of
-   * a car that is going nowhere anyway. The counter resets on emission, so a vehicle that
-   * stays stuck keeps asking rather than asking once and going quiet.
+   * The threshold is `STALL_WATCHDOG_SECONDS`, and the note at its definition is the whole
+   * of its justification: it must sit above the worst stall healthy congestion produces and
+   * below the bound past which the simulation's own sweeps call a run defective. It is
+   * deliberately *not* the old eight-second stuck timeout the previous movement code used,
+   * which fired below observed-healthy behaviour. The counter resets on emission, so a
+   * vehicle that stays stuck keeps asking rather than asking once and going quiet.
    *
    * Parked vehicles are exempt: standing still is what parking *is*.
    */
@@ -190,7 +187,7 @@ export class TrafficAdapter {
         continue;
       }
       const stalled = (this.stalledFor.get(vehicle.id) ?? 0) + dt;
-      if (stalled >= UNIVERSAL_STUCK_TIMEOUT) {
+      if (stalled >= STALL_WATCHDOG_SECONDS) {
         this.stalledFor.set(vehicle.id, 0);
         events.push({ kind: TrafficEventKind.Blocked, vehicleId: vehicle.id });
       } else {
