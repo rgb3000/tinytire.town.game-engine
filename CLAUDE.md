@@ -57,8 +57,10 @@ also define fixed terrain via `obstacles?: ObstacleDefinition[]`.
 ### Entity Model (`src/entities/`)
 
 Entities (`House`, `Business`, `Car`, `GasStation`) are plain data classes with an `id`
-field, grid position, and colour. Cars have state machines and track their path as
-`GridPos[]` arrays.
+field, grid position, and colour. `Car` carries a state machine (`CarState`), its cargo and
+fuel, and the pose it is drawn at — and deliberately *not* its route, its progress along it
+or its speed. Those live in the traffic world (see below) and are mirrored back onto the car
+once a frame; a car is the render-side view of a vehicle, not a second copy of it.
 
 ### Systems (`src/systems/`)
 
@@ -66,7 +68,11 @@ Systems are stateful classes instantiated by `Game`:
 
 - **SpawnSystem** — Spawns houses/businesses over time with increasing frequency.
 - **DemandSystem** — Adds demand pins to businesses; triggers game over when max demand exceeded.
-- **CarSystem** — Moves cars along paths, handles lane-based traffic.
+- **CarSystem** — Owns cars and their journeys: dispatch, cargo, fuel, score and what
+  "arrived" means. Movement itself is simulated by `src/traffic/`, reached through
+  `src/systems/car/TrafficAdapter.ts`. `CarSystem.inspect(car)` is the one read-only window
+  onto simulated movement (speed, arc, route length, stalled time), surfaced publicly as
+  `Game.inspectCar(car)`.
 - **RoadSystem** — Manages road placement and deletion. There are no bridges, and roads
   cannot cross water. Islands are reached by highway instead, which validates only its two
   endpoints (`src/input/HighwayDrawer.ts`) and spans whatever lies between them.
@@ -85,6 +91,45 @@ The designer's *UI* is not here — this class is driven by whatever front end e
 ### Pathfinding (`src/pathfinding/`)
 
 A* pathfinder with octile distance heuristic. Results cached and invalidated when roads change.
+
+### Traffic (`src/traffic/`)
+
+Pure, canvas-free continuous car-following — the model that actually moves the cars. The
+game hands it routes and reads positions back; it knows nothing about houses, cargo, fuel or
+score. `src/systems/car/TrafficAdapter.ts` is the only translator between the two, and
+`src/traffic/index.ts` is an internal barrel that `src/index.ts` does not re-export.
+
+A car's position is **one number** — `arcDistance` along a single route curve — and
+`pixelPos`, heading and elevation are derived from it every frame, never written
+independently. That single source of truth is what makes position jumps impossible: there is
+no second representation to drift out of agreement with the first.
+
+A route spans road and highway alike; segment kind affects only the speed limit and, for
+highway, an elevation profile. So there is no separate highway integrator and no splice at
+the junction between the two.
+
+Three properties are worth knowing, because none is visible from any one file:
+
+- **Following and junctions cover the space only together.** A lane is a *directed* edge, so
+  two cars converging on a cell from different approaches are invisible to each other as
+  leader and follower — but a merge implies three or more connections at that cell, which
+  makes it an intersection, and junction admission serialises them there. Neither mechanism
+  is complete alone; together they leave no gap.
+- **Junction admission is greedy over a total order**, which is why it cannot deadlock and
+  needs no escape timeout. *Rechts vor links* shapes the order but cannot cycle it. The old
+  model's `INTERSECTION_DEADLOCK_TIMEOUT` and `UNIVERSAL_STUCK_TIMEOUT` existed to break
+  cycles that this construction cannot produce, and were deleted with it.
+- **Deceleration is computed once, at one site.** Every reason to slow down — a leader, a
+  junction stop line, a route end — is collapsed into a single virtual leader and fed to IDM
+  (`headway.ts`). Two independently-tuned ramps combined with `Math.min` was the old model
+  and the source of its disagreements about how hard to brake.
+
+`STALL_WATCHDOG_SECONDS` (`tuning.ts`) is *not* a deadlock escape: it is a report. After 12s
+of unchosen standstill the adapter emits `Blocked` and the game decides whether to reroute or
+strand — the remedy is game-side, so the threshold lives at the seam, not in the model.
+
+Nothing here imports Three.js or `Grid`, enforced by `src/traffic/purity.test.ts`, so the
+whole model is exercised directly by the Node-only suite.
 
 ### Terrain (`src/terrain/`)
 
@@ -133,6 +178,11 @@ CarLayer, HighwayLayer.
 Game balance constants centralised in `src/constants.ts`. Rendering constants (colours,
 sizes) also in `constants.ts`.
 
+Traffic tuning is the exception and lives in `src/traffic/tuning.ts`, not in `constants.ts`:
+it is engine-wide *feel* rather than a per-map setting, so none of it may become a
+`GameConstants` key. Each value there records the measurements that bracket it, because a
+number defensible only by observation is not defensible from the code.
+
 ## Testing
 
 Tests are Node-only: no DOM, no WebGL. Much of the engine is only observable through `Game`,
@@ -140,6 +190,10 @@ which needs a canvas, and that behaviour is still verified by running the demo r
 a test.
 
 What the suite does cover is everything reducible to data: the map format's round trip,
-config resolution, the static constants guard, seeded obstacle generation, and the terrain
-geometry pipeline end to end. Importing Three.js under Node is fine — only the renderer needs
+config resolution, the static constants guard, seeded obstacle generation, the terrain
+geometry pipeline end to end, and the traffic model in full. The last of those is the reason
+`src/traffic/` is pure: because it touches neither canvas nor `Grid`, whole simulated cities
+run in Node, and `src/traffic/invariants.test.ts` sweeps them for the properties no unit test
+can state — no overlapping cars, no position jumps, no stalls beyond a bound, and identical
+output from identical input. Importing Three.js under Node is fine — only the renderer needs
 a context — so the layers that merely build geometry are testable too, and are tested.

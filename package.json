@@ -1,6 +1,6 @@
 {
   "name": "@tinytire/engine",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "The game engine behind TinyTire.town — draw roads, connect colour-matched houses to businesses, keep the cars moving. Three.js rendering, A* pathfinding, procedural audio.",
   "keywords": [
     "game-engine",

@@ -56,7 +56,9 @@ export const STOPPED_SPEED = TILE_SIZE * 0.05;
  *
  * It lives here rather than in `src/constants.ts` for two reasons: it is engine-wide feel
  * rather than a per-map setting, so it must not become a `GameConstants` key; and Task 14
- * deletes `UNIVERSAL_STUCK_TIMEOUT` from `src/constants.ts` and verifies the deletion with a
- * grep that must come back empty.
+ * deleted `UNIVERSAL_STUCK_TIMEOUT` from `src/constants.ts`. That deletion is verified by
+ * checking for live *imports*, not for mentions of the name — this paragraph is itself a
+ * mention, and is the record of why 8s was the wrong number, so a grep for the bare name
+ * will always find it and finding it is not a failure.
  */
 export const STALL_WATCHDOG_SECONDS = 12;

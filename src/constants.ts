@@ -23,20 +23,18 @@ export const CAR_SPEED = 1; // tiles per second
 export const LANE_OFFSET = TILE_SIZE * 0.12;    // px from tile center to lane center
 export const CAR_WIDTH = TILE_SIZE * 0.12;       // px (narrow dimension, perpendicular to travel)
 export const CAR_LENGTH = TILE_SIZE * 0.3;      // px (long dimension, along travel direction)
+/**
+ * Fraction of a road's speed limit that applies inside an intersection cell.
+ *
+ * The sole survivor of the old movement constants: it is now read once, by
+ * `TrafficAdapter.describeCell`, as the speed limit of a route segment. Everything it used
+ * to sit beside — gap ramps, approach-deceleration distances, gap acceptance and the two
+ * escape timeouts — was scaffolding around a mechanism the simulation replaced outright,
+ * and was deleted with it. Following distance is now IDM (`src/traffic/headway.ts`),
+ * junction order is admission (`src/traffic/junction.ts`), and neither has, or needs, a
+ * timeout to break out of.
+ */
 export const INTERSECTION_SPEED_MULTIPLIER = 0.7;
-export const INTERSECTION_DEADLOCK_TIMEOUT = 2.0; // seconds
-
-// Arc-length following distance
-export const CAR_MIN_GAP = TILE_SIZE * 0.4;          // ~20px minimum bumper gap
-export const CAR_COMFORT_GAP = TILE_SIZE * 1.5;      // ~75px full-speed gap
-
-// Intersection approach deceleration
-export const INTERSECTION_STOP_DIST = TILE_SIZE * 0.3;   // stop distance before conflict point (px)
-export const INTERSECTION_DECEL_DIST = TILE_SIZE * 2.0;  // start decelerating distance (px)
-
-// T-intersection gap acceptance
-export const T_INTERSECTION_GAP_TIME = 2.0;  // seconds of clear gap needed on major road
-export const UNIVERSAL_STUCK_TIMEOUT = 8.0; // seconds
 
 // Unloading
 export const UNLOAD_TIME = 1; // seconds

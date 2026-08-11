@@ -680,3 +680,49 @@ describe('CarSystem.carsDependingOn', () => {
     expect(town.pending.isPending(ahead.gx, ahead.gy)).toBe(false);
   });
 });
+
+describe('CarSystem.inspect', () => {
+  it('reports nothing for a car the simulation is not driving', () => {
+    // The public replacement for `Car.currentSpeed` has to answer for an idle car too, and
+    // the honest answer is not zero — it is that there is no route to be anywhere along.
+    const { carSystem, cars } = makeSystem();
+    expect(cars.length).toBeGreaterThan(0);
+    expect(cars[0].state).toBe(CarState.Idle);
+    expect(carSystem.inspect(cars[0])).toBeNull();
+  });
+
+  it('reports the position and speed the simulation actually holds', () => {
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => town.adapter.getArc(car) > TILE_SIZE, 600);
+
+    const snap = town.carSystem.inspect(car);
+    expect(snap).not.toBeNull();
+    // Against the adapter, not against itself: this is a copy of the simulation's numbers
+    // and the only failure worth catching is it copying the wrong ones.
+    expect(snap!.arc).toBe(town.adapter.getArc(car));
+    expect(snap!.speed).toBe(town.adapter.getSpeed(car));
+    expect(snap!.routeLength).toBe(town.adapter.getRouteFor(car)!.length);
+    expect(snap!.stalledSeconds).toBe(town.adapter.getStalledSeconds(car));
+
+    // And the premises that make those numbers mean something: the car is under way, so
+    // neither the arc nor the speed is sitting at the value an unwritten field would have.
+    expect(snap!.arc).toBeGreaterThan(TILE_SIZE);
+    expect(snap!.speed).toBeGreaterThan(0);
+    expect(snap!.arc).toBeLessThan(snap!.routeLength);
+  });
+
+  it('hands out a snapshot, not a window onto the vehicle', () => {
+    // Mutating it must not reach the simulation — that is the whole difference between this
+    // and the `currentSpeed` field it replaces, which was a live mirror.
+    const town = makeTown();
+    const car = dispatched(town);
+    town.runUntil(() => town.adapter.getArc(car) > TILE_SIZE, 600);
+
+    const snap = town.carSystem.inspect(car)!;
+    snap.arc = -1;
+    snap.speed = -1;
+    expect(town.adapter.getArc(car)).toBeGreaterThan(0);
+    expect(town.carSystem.inspect(car)!.arc).toBe(town.adapter.getArc(car));
+  });
+});

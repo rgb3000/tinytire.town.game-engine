@@ -21,6 +21,14 @@ export { MapDesigner, DesignerTool } from './designer/MapDesigner';
 // Entities — exposed for debug/inspection UI, not for construction by consumers.
 export { Car, CarState } from './entities/Car';
 
+// The movement figures a car no longer carries. `Car` used to hold `currentSpeed` and the
+// route bookkeeping around it; the traffic simulation owns all of that now, and a car is a
+// mirror of it rather than a second copy. This type is the read-only snapshot that replaces
+// those fields — a plain record of numbers, produced only by `Game.inspectCar`. It is a
+// *type* export on purpose: nothing from `systems/` becomes constructible or reachable, and
+// the simulation's own types stay behind the seam.
+export type { CarInspection } from './systems/CarSystem';
+
 // Capture
 export { GameScreenshot } from './utils/GameScreenshot';
 

@@ -10,7 +10,7 @@
  *
  *  - a following ramp on the gap alone is blind to the leader's *speed*, so it treats a
  *    stationary car and a car matching your own speed identically;
- *  - the intersection ramp reached zero `INTERSECTION_STOP_DIST` from the junction
+ *  - the intersection ramp reached zero `OLD_INTERSECTION_STOP_DIST` from the junction
  *    *centre*, which is inside the junction cell — cars stopped in the box.
  *
  * Expectations are derived from tile arithmetic (`TILE_SIZE`, `CAR_LENGTH`)
@@ -28,10 +28,24 @@ import { junctionEntryArc, isInsideJunction, junctionKey, nearestConstraint } fr
 import { SegmentKind, VehicleMode, createWorld } from './types';
 import { Direction } from '../types';
 import type { Route, RouteInput, TrafficWorld, Vehicle } from './types';
-import {
-  CAR_COMFORT_GAP, CAR_LENGTH, CAR_MIN_GAP,
-  INTERSECTION_DECEL_DIST, INTERSECTION_STOP_DIST, TILE_SIZE,
-} from '../constants';
+import { CAR_LENGTH, TILE_SIZE } from '../constants';
+
+/**
+ * The four tuning values the replaced model ran on, as they last stood in
+ * `src/constants.ts` under the names `CAR_MIN_GAP`, `CAR_COMFORT_GAP`,
+ * `INTERSECTION_STOP_DIST` and `INTERSECTION_DECEL_DIST`.
+ *
+ * They are inlined here because Task 14 deleted them from production: nothing computes with
+ * them any more, and re-exporting them so a test can describe history would keep a dead
+ * mechanism's vocabulary alive on the module surface. Their *values* still matter, because
+ * the tests below claim the old rule gave a specific wrong answer, and that claim is only
+ * checkable against the numbers the old rule actually used. Keeping them local also freezes
+ * them: a future edit to a live constant can no longer silently rewrite what history says.
+ */
+const OLD_CAR_MIN_GAP = TILE_SIZE * 0.4;
+const OLD_CAR_COMFORT_GAP = TILE_SIZE * 1.5;
+const OLD_INTERSECTION_STOP_DIST = TILE_SIZE * 0.3;
+const OLD_INTERSECTION_DECEL_DIST = TILE_SIZE * 2.0;
 
 const R = SegmentKind.Road;
 const X = SegmentKind.Intersection;
@@ -141,9 +155,9 @@ function minOfTwoMultipliers(
 
   const leader = index.findLeader(w, v);
   const gap = leader === null ? Infinity : leader.gap;
-  const followingMult = gap <= CAR_MIN_GAP ? 0
-    : gap >= CAR_COMFORT_GAP ? 1
-      : (gap - CAR_MIN_GAP) / (CAR_COMFORT_GAP - CAR_MIN_GAP);
+  const followingMult = gap <= OLD_CAR_MIN_GAP ? 0
+    : gap >= OLD_CAR_COMFORT_GAP ? 1
+      : (gap - OLD_CAR_MIN_GAP) / (OLD_CAR_COMFORT_GAP - OLD_CAR_MIN_GAP);
 
   let intersectionMult = 1;
   // The old rule had no junction identity: admitted anywhere was admitted everywhere.
@@ -151,9 +165,9 @@ function minOfTwoMultipliers(
     const centre = junctionCentreAhead(route, v.arcDistance);
     if (centre !== null) {
       const d = centre - v.arcDistance;
-      intersectionMult = d <= INTERSECTION_STOP_DIST ? 0
-        : d >= INTERSECTION_DECEL_DIST ? 1
-          : (d - INTERSECTION_STOP_DIST) / (INTERSECTION_DECEL_DIST - INTERSECTION_STOP_DIST);
+      intersectionMult = d <= OLD_INTERSECTION_STOP_DIST ? 0
+        : d >= OLD_INTERSECTION_DECEL_DIST ? 1
+          : (d - OLD_INTERSECTION_STOP_DIST) / (OLD_INTERSECTION_DECEL_DIST - OLD_INTERSECTION_STOP_DIST);
     }
   }
 
@@ -496,22 +510,22 @@ describe('nearestConstraint', () => {
 
   /**
    * The old intersection ramp measured to the junction *centre* and reached zero
-   * `INTERSECTION_STOP_DIST` short of it — a stop line inside the cell. This module's stop
+   * `OLD_INTERSECTION_STOP_DIST` short of it — a stop line inside the cell. This module's stop
    * line is the cell boundary, so a car that has crossed it is already committed and must
    * be carried by admission rather than braked.
    */
   it('stops at the junction boundary where the old ramp stopped inside the box', () => {
     // Premise: the old ramp's zero point really did lie within the junction cell.
-    expect(INTERSECTION_STOP_DIST).toBeLessThan(TILE_SIZE / 2);
+    expect(OLD_INTERSECTION_STOP_DIST).toBeLessThan(TILE_SIZE / 2);
 
     const centre = 2 * TILE_SIZE;
     const boundary = centre - TILE_SIZE / 2;
-    const oldStopLine = centre - INTERSECTION_STOP_DIST;
+    const oldStopLine = centre - OLD_INTERSECTION_STOP_DIST;
     const between = (boundary + oldStopLine) / 2;
     expect(between).toBeGreaterThan(boundary);
     expect(between).toBeLessThan(oldStopLine);
     // Premise: the old ramp is engaged this close to the junction, not idling at 1.
-    expect(centre - between).toBeLessThan(INTERSECTION_DECEL_DIST);
+    expect(centre - between).toBeLessThan(OLD_INTERSECTION_DECEL_DIST);
 
     const w = world(road('r1', [R, R, X, R]), vehicle('a', between, 20));
     const index = indexed(w);

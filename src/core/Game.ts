@@ -15,7 +15,7 @@ import { UndoSystem } from '../input/UndoSystem';
 import { RoadSystem } from '../systems/RoadSystem';
 import { SpawnSystem } from '../systems/SpawnSystem';
 import { DemandSystem } from '../systems/DemandSystem';
-import { CarSystem } from '../systems/CarSystem';
+import { CarSystem, type CarInspection } from '../systems/CarSystem';
 import { MusicSystem } from '../systems/MusicSystem';
 import { SoundEffectSystem } from '../systems/SoundEffectSystem';
 import { ObstacleSystem } from '../systems/ObstacleSystem';
@@ -312,6 +312,18 @@ export class Game {
 
   getCars(): Car[] {
     return this.carSystem.getCars();
+  }
+
+  /**
+   * Live movement figures for one car, for a debug or inspection UI — or `null` when the
+   * simulation is not currently driving it.
+   *
+   * The only way in from outside to anything the traffic model holds. See
+   * {@link CarSystem.inspect} for why the shape is what it is; the delegation exists because
+   * `Game` is what a consumer has, and `CarSystem` is not exported.
+   */
+  inspectCar(car: Car): CarInspection | null {
+    return this.carSystem.inspect(car);
   }
 
   getCarEventLog(): typeof CarEventLog {

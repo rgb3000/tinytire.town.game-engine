@@ -35,6 +35,27 @@ import type { GasStationSystem } from './GasStationSystem';
  *    doing that inside step 3 would have the fuel deduction bill a car for a route it had
  *    already left.
  */
+/**
+ * What the traffic simulation currently holds for one car, copied out for display.
+ *
+ * Public — see {@link CarSystem.inspect}, which is the only thing that produces one and the
+ * only place its shape is decided. All distances are pixels, speed is pixels per second and
+ * `stalledSeconds` is seconds.
+ */
+export interface CarInspection {
+  /** Pixels per second along the route. Zero while stopped, whatever the reason. */
+  speed: number;
+  /** Arc distance travelled along the route so far. The simulation's whole position. */
+  arc: number;
+  /** Total arc length of the route, so `arc / routeLength` is progress. */
+  routeLength: number;
+  /**
+   * How long this car has stood still without choosing to. Resets when it moves, parks or
+   * is rerouted, so it sawtooths rather than growing without bound.
+   */
+  stalledSeconds: number;
+}
+
 export class CarSystem {
   private cars: Car[] = [];
   private carsById = new Map<string, Car>();
@@ -85,6 +106,45 @@ export class CarSystem {
    */
   getTrafficAdapter(): TrafficAdapter {
     return this.adapter;
+  }
+
+  /**
+   * A read-only snapshot of what the simulation currently holds for one car, or `null` when
+   * it holds no route for it — an idle car parked at its house, or one whose route was torn
+   * down this frame.
+   *
+   * This is the replacement for `Car.currentSpeed`, and it is deliberately not a
+   * `getSpeed(car)` re-export. `Car` is public "for debug/inspection UI", and the rebuild's
+   * whole point is that a car no longer carries its own movement state — so the field had to
+   * go, but the *question* it answered is legitimate and a debug sidebar has nowhere else to
+   * ask it. Re-exporting {@link TrafficAdapter} to answer it would put the seam's internal
+   * type on the public surface, which is exactly what the seam exists to prevent.
+   *
+   * Three properties of the shape are chosen rather than incidental:
+   *
+   * - **It is a snapshot, not a handle.** Plain numbers, copied out, valid for the frame
+   *   they were asked in. A consumer cannot hold it and watch it change, and cannot reach
+   *   anything live through it.
+   * - **It is decided once.** `speed` alone is what was lost, but answering only that
+   *   invites `inspect`-shaped requests one field at a time, each a fresh public-API
+   *   decision. `arc` and `routeLength` come with it because they are the position — the
+   *   simulation's single source of truth — and its scale, and a debug UI that wants speed
+   *   almost always wants progress next. `stalledSeconds` is the watchdog's own count and
+   *   the one number that explains a car that is *not* moving.
+   * - **It names no simulation type.** Four numbers. `VehicleMode`, `Route` and the vehicle
+   *   record stay inside; `Car.state` already carries what a UI needs about intent.
+   *
+   * Adding a field here is a public-API promise. Prefer to be asked twice.
+   */
+  inspect(car: Car): CarInspection | null {
+    const route = this.adapter.getRouteFor(car);
+    if (route === null) return null;
+    return {
+      speed: this.adapter.getSpeed(car),
+      arc: this.adapter.getArc(car),
+      routeLength: route.length,
+      stalledSeconds: this.adapter.getStalledSeconds(car),
+    };
   }
 
   /**
