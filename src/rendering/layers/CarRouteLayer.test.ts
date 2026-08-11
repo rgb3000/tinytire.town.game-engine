@@ -220,9 +220,8 @@ describe('CarRouteLayer route geometry', () => {
 
   it('draws the curve the car is driving, not the centres of the tiles it passes', () => {
     // The deleted `buildFromGridPath` emitted one point per `car.path` step at the tile
-    // centre; the deleted `buildFromSmoothPath` read `car.smoothPath`. Neither field has
-    // been written since the simulation took over movement, and the route's own polyline
-    // is what the car's position is sampled from.
+    // centre; the deleted `buildFromSmoothPath` read `car.smoothPath`. Neither field exists
+    // any more — the route's own polyline is what the car's position is sampled from.
     const f = fixture(CORNER);
     const centres = CORNER.map(c => ({ x: (c.gx + 0.5) * TILE_SIZE, y: (c.gy + 0.5) * TILE_SIZE }));
 

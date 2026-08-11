@@ -220,6 +220,12 @@ export class TrafficAdapter {
    * `pixelPos` and `renderAngle` are derived from `arcDistance` every frame and never
    * written anywhere else. That single source of truth is what makes position jumps
    * impossible: there is no second representation to fall out of step with.
+   *
+   * What lands on the car is exactly what a renderer needs to draw the frame. Speed used to
+   * be mirrored here too, onto `Car.currentSpeed`, and nothing ever read it — a second
+   * representation of a simulated quantity kept alive for a debug overlay that asks
+   * {@link TrafficAdapter.getSpeed} instead. Anything diagnostic belongs on that side of the
+   * seam, where it cannot go stale between `writeBack` calls.
    */
   writeBack(cars: Car[]): void {
     for (const car of cars) {
@@ -239,7 +245,6 @@ export class TrafficAdapter {
       car.renderAngle = sample.angle;
       car.elevationY = sample.elevationY;
       car.onHighway = sample.elevationY !== 0;
-      car.currentSpeed = vehicle.speed;
     }
   }
 

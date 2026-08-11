@@ -1,131 +1,92 @@
 /**
- * Covers `Car.clearPathState` and its relationship to `resetToIdle`.
+ * Covers what a `Car` is once the traffic world owns routes: an identity, an errand, and a
+ * position to draw it at.
  *
- * Four sites used to clear "the path stuff" by hand — `CarRouter.assignPath`, stranding in
- * `CarRouter`, and both ends of a gas-station visit in `CarRefuelingManager` — each with a
- * different subset. The smaller subsets only worked because the next `assignPath` happened
- * to finish the job.
- *
- * Two invariants are worth pinning: what the primitive clears, and what it deliberately
- * does *not* (traffic and placement state, which `assignPath` has never touched).
+ * This file used to pin `clearPathState` — the primitive four sites called to forget "the
+ * path stuff", each previously clearing a different subset of it by hand. There is no path
+ * stuff left on the car to forget: `TrafficAdapter.installRoute` replaces a route wholesale
+ * and `removeVehicle` drops it, so the primitive went with the fields.
  */
 import { describe, it, expect } from 'vitest';
 
 import { Car, CarState } from './Car';
 import { GameColor } from '../types';
 
-/** A car mid-journey, with every route-derived field set to something non-default. */
+/** A car mid-errand, with every field a journey touches set to something non-default. */
 function movingCar(): Car {
-  const car = new Car('house-1', GameColor.Red, { gx: 2, gy: 2 }, 100);
+  const car = new Car('house-1', GameColor.Red, { gx: 0, gy: 0 }, 30);
   car.state = CarState.GoingToBusiness;
-  car.path = [{ kind: 'grid', pos: { gx: 2, gy: 2 } }, { kind: 'grid', pos: { gx: 3, gy: 2 } }];
-  car.pathIndex = 1;
-  car.segmentProgress = 0.4;
-  car.smoothPath = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
-  car.smoothCumDist = [0, 10];
-  car.smoothCellDist = [0, 10];
+  car.targetBusinessId = 'biz-1';
+  car.destination = { gx: 5, gy: 5 };
+  car.hasLoad = true;
   car.onHighway = true;
-  car.highwayPolyline = [{ x: 0, y: 0 }];
-  car.highwayCumDist = [0];
-  car.highwayProgress = 5;
-  car.sameLaneWaitTime = 1.5;
-  car.stuckTimer = 2.5;
-  car.lastAdvancedPathIndex = 1;
-  car.arcDistance = 12;
-  car.currentSpeed = 40;
-  car.leaderId = 'car-9';
-  car.leaderGap = 8;
-  // Not route state — see the second test.
-  car.intersectionWaitTime = 3;
-  car.wasBlocked = true;
-  car.arrivalTime = 7;
+  car.elevationY = -12;
+  car.prevElevationY = -12;
+  car.renderAngle = Math.PI;
+  car.prevRenderAngle = Math.PI;
+  car.unloadTimer = 0.4;
+  car.targetGasStationId = 'gs-1';
+  car.refuelTimer = 0.2;
+  car.postRefuelIntent = 'home';
+  car.pixelPos = { x: 200, y: 200 };
   return car;
 }
 
-describe('Car.clearPathState', () => {
-  it('forgets the route and everything derived from progress along it', () => {
-    const car = movingCar();
-
-    car.clearPathState();
-
-    expect(car.path).toEqual([]);
-    expect(car.pathIndex).toBe(0);
-    expect(car.segmentProgress).toBe(0);
-    expect(car.smoothPath).toEqual([]);
-    expect(car.smoothCumDist).toEqual([]);
-    expect(car.smoothCellDist).toEqual([]);
-    expect(car.onHighway).toBe(false);
-    expect(car.highwayPolyline).toBeNull();
-    expect(car.highwayCumDist).toBeNull();
-    expect(car.highwayProgress).toBe(0);
-    expect(car.sameLaneWaitTime).toBe(0);
-    expect(car.stuckTimer).toBe(0);
-    expect(car.lastAdvancedPathIndex).toBe(0);
-    expect(car.arcDistance).toBe(0);
-    expect(car.currentSpeed).toBe(0);
-    expect(car.leaderId).toBeNull();
-    expect(car.leaderGap).toBe(Infinity);
+describe('Car', () => {
+  it('starts idle with a full tank', () => {
+    const car = new Car('house-1', GameColor.Blue, { gx: 1, gy: 1 }, 30);
+    expect(car.state).toBe(CarState.Idle);
+    expect(car.fuel).toBe(30);
+    expect(car.fuelCapacity).toBe(30);
   });
 
-  it('leaves traffic state, position and cargo alone', () => {
-    // `assignPath` has never reset these, and folding them in would change how a car
-    // rejoins an intersection queue after a reroute.
-    const car = movingCar();
-    car.hasLoad = true;
-    const { x, y } = car.pixelPos;
+  it('starts at the centre of its home tile', () => {
+    const car = new Car('house-1', GameColor.Blue, { gx: 2, gy: 3 }, 30);
+    expect(car.pixelPos).toEqual(car.prevPixelPos);
+  });
 
-    car.clearPathState();
-
-    expect(car.intersectionWaitTime).toBe(3);
-    expect(car.wasBlocked).toBe(true);
-    expect(car.arrivalTime).toBe(7);
-    expect(car.hasLoad).toBe(true);
-    expect(car.pixelPos).toEqual({ x, y });
-    expect(car.state).toBe(CarState.GoingToBusiness);
+  it('carries no route state of its own', () => {
+    // The invariant Task 11 bought: a route is a sequence, so route bookkeeping on the car
+    // would be a list. There is none — the world holds the only copy, and every consumer
+    // asks `TrafficAdapter` for it.
+    const car = new Car('house-1', GameColor.Blue, { gx: 2, gy: 3 }, 30);
+    const listFields = Object.entries(car).filter(([, value]) => Array.isArray(value));
+    expect(listFields).toEqual([]);
   });
 });
 
 describe('Car.resetToIdle', () => {
-  it('is a superset of clearPathState', () => {
-    const viaReset = movingCar();
-    viaReset.resetToIdle({ gx: 2, gy: 2 });
-
-    const viaClear = movingCar();
-    viaClear.clearPathState();
-
-    // Every field the primitive clears is still cleared by the full reset.
-    for (const key of ['path', 'pathIndex', 'segmentProgress', 'smoothPath', 'smoothCumDist',
-      'smoothCellDist', 'onHighway', 'highwayPolyline', 'highwayCumDist', 'highwayProgress',
-      'sameLaneWaitTime', 'stuckTimer', 'lastAdvancedPathIndex', 'arcDistance', 'currentSpeed',
-      'leaderId', 'leaderGap'] as const) {
-      expect(viaReset[key], key).toEqual(viaClear[key]);
-    }
-  });
-
-  it('additionally clears the state a journey leaves behind', () => {
+  it('clears the state a journey leaves behind', () => {
     const car = movingCar();
-    car.hasLoad = true;
-    car.targetBusinessId = 'biz-1';
-    car.targetGasStationId = 'gs-1';
-
     car.resetToIdle({ gx: 2, gy: 2 });
 
     expect(car.state).toBe(CarState.Idle);
     expect(car.hasLoad).toBe(false);
     expect(car.targetBusinessId).toBeNull();
     expect(car.targetGasStationId).toBeNull();
-    expect(car.intersectionWaitTime).toBe(0);
-    expect(car.wasBlocked).toBe(false);
-    expect(car.arrivalTime).toBe(0);
+    expect(car.destination).toBeNull();
+    expect(car.onHighway).toBe(false);
+    expect(car.elevationY).toBe(0);
+    expect(car.prevElevationY).toBe(0);
+    expect(car.renderAngle).toBe(0);
+    expect(car.prevRenderAngle).toBe(0);
+    expect(car.unloadTimer).toBe(0);
+    expect(car.refuelTimer).toBe(0);
+    expect(car.postRefuelIntent).toBe('business');
+  });
+
+  it('moves the car to its home tile centre', () => {
+    const car = movingCar();
+    car.resetToIdle({ gx: 2, gy: 2 });
+    expect(car.pixelPos).toEqual(car.prevPixelPos);
+    expect(car.pixelPos.x).not.toBe(200);
   });
 
   it('keeps the fuel in the tank', () => {
     // A car that reaches home must still visit a gas station.
     const car = movingCar();
     car.fuel = 12;
-
     car.resetToIdle({ gx: 2, gy: 2 });
-
     expect(car.fuel).toBe(12);
   });
 });

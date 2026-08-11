@@ -1,5 +1,4 @@
-import type { GameColor, GridPos, PixelPos, Direction } from '../types';
-import type { PathStep } from '../highways/types';
+import type { GameColor, GridPos, PixelPos } from '../types';
 import { generateId, gridToPixelCenter } from '../utils/math';
 
 export const CarState = {
@@ -13,6 +12,17 @@ export const CarState = {
 } as const;
 export type CarState = (typeof CarState)[keyof typeof CarState];
 
+/**
+ * A car as the rest of the game sees it: who it belongs to, what it is doing and where it
+ * is being drawn.
+ *
+ * Deliberately *not* here: the route, the progress along it and every derived quantity —
+ * lane geometry, arc distance, speed, leader, junction timers. Those live in the traffic
+ * world (`src/traffic/`), keyed by vehicle, and `TrafficAdapter` is the only thing that
+ * reads or writes them. Holding a second copy on the car is what let position, route and
+ * dependency answers drift apart from each other; there is now one representation and the
+ * car is a mirror of it, refreshed by `TrafficAdapter.writeBack`.
+ */
 export class Car {
   readonly id: string;
   readonly color: GameColor;
@@ -20,40 +30,13 @@ export class Car {
   state: CarState = CarState.Idle;
   targetBusinessId: string | null = null;
   destination: GridPos | null = null;
-  direction: Direction | null = null;
   renderAngle = 0;      // radians: 0=Right, PI/2=Down, PI=Left, -PI/2=Up
   prevRenderAngle = 0;  // previous frame's angle for render interpolation
-
-  // Path
-  path: PathStep[] = [];
-  pathIndex = 0;
-  outboundPath: PathStep[] = []; // saved outbound path for Unloading reservation
-  segmentProgress = 0; // 0..1 between current and next tile
-  intersectionWaitTime = 0;
-  sameLaneWaitTime = 0;
-  stuckTimer = 0;
-  lastAdvancedPathIndex = 0;
-  wasBlocked = false;
-
-  // Smooth lane path (precomputed from road geometry)
-  smoothPath: { x: number; y: number }[] = [];
-  smoothCumDist: number[] = [];
-  smoothCellDist: number[] = [];
-
-  // Arc-length traffic (continuous distance-based collision)
-  arcDistance = 0;           // current distance along smoothPath (px)
-  currentSpeed = 0;         // current speed in px/sec
-  leaderId: string | null = null;   // car ahead on same lane
-  leaderGap = Infinity;     // pixel distance to leader
-  arrivalTime = 0;          // time when car started waiting at intersection
 
   // Highway state
   onHighway = false;
   elevationY = 0;
   prevElevationY = 0;
-  highwayPolyline: PixelPos[] | null = null;
-  highwayCumDist: number[] | null = null;
-  highwayProgress = 0; // arc-length distance traveled on current highway
 
   // Unloading
   unloadTimer = 0;
@@ -92,71 +75,27 @@ export class Car {
   }
 
   /**
-   * Forget the route this car was following: the path, its smoothed geometry, the highway
-   * it may have been on, and everything derived from progress along it.
-   *
-   * This is the set `CarRouter.assignPath` has always cleared before installing a new path,
-   * which is what makes it the right unit — every other site that cleared "the path stuff"
-   * (stranding in `CarRouter`, arriving at and leaving a gas station in
-   * `CarRefuelingManager`) was clearing a different subset of it by hand, and the smaller
-   * subsets only worked because the next `assignPath` happened to finish the job.
-   *
-   * Deliberately *not* included: `intersectionWaitTime`, `wasBlocked`, `arrivalTime` and
-   * position. Those are traffic and placement state rather than route state, and
-   * `assignPath` has never touched them — folding them in here would change how a car
-   * rejoins an intersection queue after a reroute.
-   */
-  clearPathState(): void {
-    this.path = [];
-    this.pathIndex = 0;
-    this.segmentProgress = 0;
-
-    this.smoothPath = [];
-    this.smoothCumDist = [];
-    this.smoothCellDist = [];
-
-    this.onHighway = false;
-    this.highwayPolyline = null;
-    this.highwayCumDist = null;
-    this.highwayProgress = 0;
-
-    this.sameLaneWaitTime = 0;
-    this.stuckTimer = 0;
-    this.lastAdvancedPathIndex = 0;
-    this.arcDistance = 0;
-    this.currentSpeed = 0;
-    this.leaderId = null;
-    this.leaderGap = Infinity;
-  }
-
-  /**
    * Reset all driving state back to idle defaults.
    *
-   * Deliberately does *not* touch `fuel` — a car that reaches home keeps whatever is left in
-   * the tank and must still visit a gas station. (This comment used to claim it refuelled.)
+   * Deliberately does *not* touch `fuel` — a car that reaches home keeps whatever is left
+   * in the tank and must still visit a gas station.
+   *
+   * Route state is no longer reset here: it lives in the traffic world, and
+   * `TrafficAdapter.removeVehicle` is what clears it. This method used to have a
+   * `clearPathState` sibling precisely because route bookkeeping was scattered across the
+   * car; there is nothing left to scatter.
    */
   resetToIdle(homePos: GridPos): void {
-    this.clearPathState();
-
     this.state = CarState.Idle;
     this.targetBusinessId = null;
     this.destination = null;
-    this.direction = null;
     this.renderAngle = 0;
     this.prevRenderAngle = 0;
-
-    this.outboundPath = [];
-    this.intersectionWaitTime = 0;
-    this.wasBlocked = false;
-    this.arrivalTime = 0;
-
+    this.onHighway = false;
     this.elevationY = 0;
     this.prevElevationY = 0;
-
     this.unloadTimer = 0;
-
     this.hasLoad = false;
-
     this.targetGasStationId = null;
     this.refuelTimer = 0;
     this.postRefuelIntent = 'business';

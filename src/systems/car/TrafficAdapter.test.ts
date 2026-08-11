@@ -956,17 +956,39 @@ describe('TrafficAdapter watchdog reset', () => {
 });
 
 describe('TrafficAdapter mirrors', () => {
-  it('mirrors the simulated speed onto the car for the debug overlay', () => {
+  /** Everything `writeBack` is allowed to touch: what a renderer needs to draw the frame. */
+  const RENDER_FIELDS = new Set([
+    'pixelPos', 'prevPixelPos',
+    'renderAngle', 'prevRenderAngle',
+    'elevationY', 'prevElevationY',
+    'onHighway',
+  ]);
+
+  it('writes render state onto the car and nothing else', () => {
+    // The car used to carry a `currentSpeed` mirror that `writeBack` refreshed and no
+    // renderer read. Simulated quantities are asked for through the seam — `getSpeed` here —
+    // so that no copy of them can sit on the car going stale between frames. Any new mirror
+    // shows up as a field outside `RENDER_FIELDS` changing.
     const grid = new Grid(20, 5);
     roadRow(grid, 8);
     const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
     const car = makeCar();
     adapter.installRoute(car, gridPath(8), false);
     for (let i = 0; i < 60; i++) adapter.update(DT);
-    adapter.writeBack([car]);
 
+    const before = structuredClone({ ...car }) as Record<string, unknown>;
+    adapter.writeBack([car]);
+    const after = structuredClone({ ...car }) as Record<string, unknown>;
+
+    const changed = Object.keys(after)
+      .filter(key => JSON.stringify(after[key]) !== JSON.stringify(before[key]));
+
+    // Premise: the car is moving, so a speed mirror would have a value to land on it, and
+    // `writeBack` genuinely did something this frame.
     expect(adapter.getSpeed(car)).toBeGreaterThan(0);
-    expect(car.currentSpeed).toBe(adapter.getSpeed(car));
+    expect(changed).toContain('pixelPos');
+
+    expect(changed.filter(key => !RENDER_FIELDS.has(key))).toEqual([]);
   });
 });
 

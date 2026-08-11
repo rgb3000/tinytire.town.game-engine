@@ -63,7 +63,6 @@ function makeSystem(): { carSystem: CarSystem; house: House; cars: Car[]; strand
  */
 function setAdrift(car: Car, state: CarState = CarState.GoingToBusiness): void {
   car.state = state;
-  car.path = [];
   const center = gridToPixelCenter({ gx: 40, gy: 40 });
   car.pixelPos = { ...center };
   car.prevPixelPos = { ...center };
@@ -575,16 +574,23 @@ describe('CarSystem.carsDependingOn', () => {
    * `car.outboundPath`. The simulation stopped writing all three when it took over movement,
    * which made the answer permanently empty — roads deleted out from under moving cars — and
    * nothing about that was a type error. Every positive assertion below is what rejects that
-   * model: with an empty `car.path` the old loops return nothing.
+   * model: the car itself holds no route, so only the simulation can answer.
    */
-  it('leaves the fields the old road-deleter read empty, so they cannot answer', () => {
+  it('leaves nothing on the car for a road-deleter to walk', () => {
+    // The premise under every positive assertion below, and the reason they cannot be
+    // satisfied by reading the car. Those three fields are gone now, so the old loops no
+    // longer compile — but this is what makes bringing them back visible here rather than
+    // in a silently-empty answer: a route is a sequence, so any route bookkeeping put back
+    // on the car is a list, and a mid-route car has none.
     const town = makeTown();
     const car = dispatched(town);
     town.runUntil(() => town.adapter.getArc(car) > 3 * TILE_SIZE, 600);
 
-    expect(car.path).toHaveLength(0);
-    expect(car.outboundPath).toHaveLength(0);
-    expect(car.pathIndex).toBe(0);
+    const listFields = Object.entries(car).filter(([, value]) => Array.isArray(value));
+    expect(listFields).toEqual([]);
+    for (const name of ['path', 'outboundPath', 'pathIndex', 'smoothPath']) {
+      expect(Object.keys(car)).not.toContain(name);
+    }
     // ...and yet the car is demonstrably somewhere along a real route.
     expect(town.adapter.getRouteFor(car)).not.toBeNull();
     expect(town.adapter.getArc(car)).toBeGreaterThan(3 * TILE_SIZE);

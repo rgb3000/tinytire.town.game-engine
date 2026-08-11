@@ -29,8 +29,9 @@ export class RoadDebugLayer {
    * would be worse than no overlay.
    *
    * It used to reproduce the three `car.path`/`car.pathIndex`/`car.outboundPath` loops that
-   * `Game.tryRemoveRoad` had. Nothing has written those fields since the simulation took
-   * over movement, so the set was permanently empty and every cell drew green.
+   * `Game.tryRemoveRoad` had. Nothing wrote those fields once the simulation took over
+   * movement, so the set was permanently empty and every cell drew green; the fields
+   * themselves are gone now.
    *
    * `adapter` is null for a `Renderer` with no simulation behind it — the map designer —
    * where there are no cars to depend on anything and only the outlines are wanted.
