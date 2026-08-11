@@ -331,11 +331,14 @@ describe('LaneIndex.findLeader', () => {
 
 describe('LaneIndex scan range', () => {
   /**
-   * `LEADER_SCAN_EDGES` is 3, giving roughly 120px of lookahead. That is not arbitrary: a
-   * car cannot stop in less than `v² / (2 * MAX_DECELERATION) + s0`, about 34px at the
-   * fastest the engine ever runs a car, so the scan carries a 3.5x margin. These two
-   * tests pin the number from both sides — a shorter scan misses the first, a longer one
-   * fails the second.
+   * `LEADER_SCAN_EDGES` is 3, giving 120px of lookahead at best and 80px guaranteed — the
+   * scan starts on the vehicle's own edge, which contributes nothing when the vehicle sits
+   * at its far end. That is not arbitrary: a car cannot stop in less than
+   * `v² / (2 * MAX_DECELERATION) + s0`, about 34px at the fastest the engine ever runs a
+   * car, so the guaranteed scan carries a 2.35x margin. `TrafficAdapter`'s constructor
+   * asserts against the guaranteed figure, since a map that only fits in the best case does
+   * not fit. These two tests pin the edge count from both sides — a shorter scan misses the
+   * first, a longer one fails the second.
    */
   it('finds a leader two edges ahead, at the far end of the scan', () => {
     const me = vehicle('a', 'r1', 5);

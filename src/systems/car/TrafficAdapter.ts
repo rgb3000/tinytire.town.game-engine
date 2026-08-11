@@ -719,14 +719,20 @@ function extendThrough(polyline: PixelPos[], cell: GridPos, where: 'start' | 'en
  * Refuse a configuration whose fastest car cannot stop inside the model's field of view.
  *
  * `LaneIndex.findLeader` scans `LEADER_SCAN_EDGES` route edges ahead and gives up, so a car
- * simply cannot see an obstacle further away than that. A grid edge is one tile, so the
- * horizon is `LEADER_SCAN_EDGES * TILE_SIZE` = 120px. A car needs `v² / (2a) + s0` to come
+ * simply cannot see an obstacle further away than that. A car needs `v² / (2a) + s0` to come
  * to rest behind something, and if that exceeds the horizon the car meets its leader before
  * it has been given any reason to brake — the collision clamp in `step` then binds every
  * time, which in a `CAR_DEBUG` build is a thrown error and otherwise a visible snap.
  *
- * The ceiling works out at 4.60 tiles/sec. The defaults are 2 tiles/sec worst case (a
- * highway at `CAR_SPEED * HIGHWAY_SPEED_MULTIPLIER`), needing 34px against 120 — a 3.5×
+ * **The horizon is `(LEADER_SCAN_EDGES − 1) * TILE_SIZE` = 80px, not
+ * `LEADER_SCAN_EDGES * TILE_SIZE`.** The scan starts from the vehicle's *own* edge, and the
+ * vehicle may be anywhere on it — at its far end, that first edge contributes nothing at
+ * all. Only the remaining edges are guaranteed, so the full-scan figure is the *best* case
+ * and this assertion has to hold in the worst one. Asserting against the best case erred in
+ * the permissive direction, for exactly the map this exists to refuse.
+ *
+ * The ceiling works out at 3.63 tiles/sec. The defaults are 2 tiles/sec worst case (a
+ * highway at `CAR_SPEED * HIGHWAY_SPEED_MULTIPLIER`), needing 34px against 80 — a 2.35×
  * margin — so this can only fire for a map that raises `CAR_SPEED`, which is exactly the
  * case it is here to catch.
  *
@@ -743,7 +749,9 @@ function extendThrough(polyline: PixelPos[], cell: GridPos, where: 'start' | 'en
 function assertSpeedWithinLookahead(cfg: CarTuning): void {
   const fastest = cfg.CAR_SPEED * Math.max(1, cfg.HIGHWAY_SPEED_MULTIPLIER) * TILE_SIZE;
   const stoppingDistance = (fastest * fastest) / (2 * MAX_DECELERATION) + DEFAULT_IDM.s0;
-  const lookahead = LEADER_SCAN_EDGES * TILE_SIZE;
+  // Minus one: the scan begins on the vehicle's own edge, which contributes nothing when
+  // the vehicle sits at its far end. See the note above.
+  const lookahead = (LEADER_SCAN_EDGES - 1) * TILE_SIZE;
   if (stoppingDistance <= lookahead) return;
 
   const ceiling = Math.sqrt(2 * MAX_DECELERATION * (lookahead - DEFAULT_IDM.s0)) / TILE_SIZE;

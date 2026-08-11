@@ -826,18 +826,21 @@ describe('TrafficAdapter configuration', () => {
     expect(fastest).toBe(2);
     const stopping = (fastest * TILE) ** 2 / (2 * TILE * 4) + S0;
     expect(stopping).toBeCloseTo(34, 6);
-    expect(3 * TILE / stopping).toBeGreaterThan(3.5);
+    // Two edges, not three. The scan starts on the car's own edge, which contributes nothing
+    // when the car is at its far end, so 80px is what is guaranteed and 120px is the best case.
+    expect(2 * TILE / stopping).toBeGreaterThan(2.3);
   });
 
   it('refuses a map whose cars cannot stop inside the leader search', () => {
     const grid = new Grid(20, 5);
     roadRow(grid, 6);
-    // The ceiling is sqrt(2 * MAX_DECELERATION * (lookahead - s0)) = 184.17px/s = 4.604
-    // tiles/sec of effective top speed, which at the default multiplier of 2 is a CAR_SPEED
-    // of 2.302.
-    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 2.3 })).not.toThrow();
-    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 2.4 }))
-      .toThrow(/safe ceiling is 4\.60 tiles\/sec/);
+    // The ceiling is sqrt(2 * MAX_DECELERATION * (lookahead - s0)) with lookahead = 80px, so
+    // 145.33px/s = 3.633 tiles/sec of effective top speed, which at the default multiplier of
+    // 2 is a CAR_SPEED of 1.816. Measured against 120px the answer was 4.60 — permissive, in
+    // the one direction an assertion that exists to refuse an unsafe map must not err.
+    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 1.8 })).not.toThrow();
+    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 1.9 }))
+      .toThrow(/safe ceiling is 3\.63 tiles\/sec/);
     // A multiplier below one cannot make a fast grid speed safe.
     expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 6, HIGHWAY_SPEED_MULTIPLIER: 0.5 }))
       .toThrow(/CAR_SPEED 6/);
@@ -846,7 +849,9 @@ describe('TrafficAdapter configuration', () => {
   it('carries a map\'s speeds into the route rather than the module defaults', () => {
     const grid = new Grid(20, 5);
     roadRow(grid, 6);
-    const adapter = new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 2 });
+    // The multiplier is pinned to 1 only so the config clears the lookahead assertion: this
+    // route is all grid, so nothing below reads the multiplier at all.
+    const adapter = new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 2, HIGHWAY_SPEED_MULTIPLIER: 1 });
     const car = makeCar();
     adapter.installRoute(car, gridPath(6), false);
     expect(adapter.getRouteFor(car)!.segments[1].speedLimit).toBeCloseTo(2 * TILE, 6);
