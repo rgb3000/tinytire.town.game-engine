@@ -23,7 +23,30 @@ export interface RouteCellInput {
 
 export type RouteSpan =
   | { kind: 'grid'; cells: RouteCellInput[] }
-  | { kind: 'highway'; polyline: PixelPos[]; speedLimit: number };
+  | {
+    kind: 'highway';
+    polyline: PixelPos[];
+    speedLimit: number;
+    /**
+     * A grid cell the crossing begins on, recorded but contributing no geometry.
+     *
+     * A grid run of a single cell cannot be a span of its own — one cell is a point, not a
+     * curve — so the adapter folds it into the crossing beside it. Folding used to mean the
+     * cell simply vanished from `cells`, and on a path whose *both* ends fold the route
+     * came out with no cells at all: invisible to `LaneIndex` in both directions, so the
+     * car neither saw a leader nor was seen as one. These two fields are what keep the fold
+     * a fold rather than a deletion.
+     *
+     * The cell sits at the crossing's own first point, so it needs no points of its own and
+     * gets no segment: the arc it would govern is the span boundary, which `segmentIndexAt`
+     * already resolves to the neighbouring span. What it gets is an entry in `cells` and
+     * `cellDist`, which is the whole of what the lane index, `cellsBetween` and
+     * `getCurrentCell` read.
+     */
+    entryCell?: GridPos;
+    /** The mirror of {@link entryCell}, at the crossing's last point. */
+    exitCell?: GridPos;
+  };
 
 export interface RouteInput {
   id: string;
@@ -43,8 +66,9 @@ export interface Route {
   points: PixelPos[];
   cumDist: number[];
   /**
-   * Grid cells traversed, in order. Highway spans contribute none, and a cell shared as
-   * the joint between two adjacent grid spans appears once.
+   * Grid cells traversed, in order. A highway span contributes none of the ground it flies
+   * over, but does contribute a cell it was asked to carry at either end (see
+   * {@link RouteSpan}). A cell shared as the joint between two adjacent spans appears once.
    */
   cells: GridPos[];
   /**

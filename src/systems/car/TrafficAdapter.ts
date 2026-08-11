@@ -26,6 +26,9 @@ import type {
  */
 const COINCIDENT_EPS = 0.5;
 
+/** The crossing arm of {@link RouteSpan}, named so a fold can be written onto it. */
+type HighwaySpan = Extract<RouteSpan, { kind: 'highway' }>;
+
 /**
  * The seam between the engine and the traffic simulation.
  *
@@ -45,6 +48,9 @@ const COINCIDENT_EPS = 0.5;
  * 3. **The worst speed a map can ask for is within the model's lookahead.** Asserted in the
  *    constructor, because `CAR_SPEED` cannot be read from inside `src/traffic/`.
  * 4. **A vehicle that stops for ever is reported.** See `update`.
+ * 5. **Every route a car is put on carries at least two cells.** Fewer and the lane index
+ *    cannot hold it, so the car has no collision avoidance in either direction. See
+ *    `installRoute`.
  */
 export class TrafficAdapter {
   private world: TrafficWorld = createWorld();
@@ -100,6 +106,14 @@ export class TrafficAdapter {
     if (spans === null) return false;
     const route = buildRoute({ id: car.id, spans });
     if (route === null) return false;
+    // Precondition 5. `LaneIndex.rebuild` and `findLeader` both skip a route with fewer than
+    // two cells, because a lane key is an edge between two of them. A car on such a route is
+    // therefore invisible as a leader *and* blind as a follower — it drives through parked
+    // traffic and parked traffic drives through it — and none of the cell-keyed queries
+    // (`getCurrentCell`, `carDependsOnCell`, `consumePassedCells`) can answer for it either.
+    // `buildRoute` accepts such a route because a cell-less curve is still a curve; whether a
+    // *car* may be put on one is this side's rule, and the answer is no.
+    if (route.cells.length < 2) return false;
 
     // Read before the store below overwrites it: routes are keyed by car id, so installing
     // is what destroys the old one, and the old one is where the car currently is.
@@ -506,11 +520,18 @@ export class TrafficAdapter {
    * keeps a cell that is not the highway's own endpoint from vanishing. The same fold
    * handles the mirror case, an origin sitting at a highway entrance.
    *
-   * The one thing the fold costs is that B does not appear in `route.cells`, so
-   * `carDependsOnCell` cannot see it. B is necessarily a highway endpoint, and the
-   * pathfinder only builds highways between `Road` and `Connector` cells; a `Connector`
-   * cannot be deleted as road at all, so the reachable gap is a plain road cell that is
-   * simultaneously a highway endpoint and a journey's destination.
+   * **The fold hands the cell to the crossing, and does not drop it.** It used to drop it —
+   * the geometry was preserved and the cell was not — which cost `carDependsOnCell` its
+   * sight of a destination sitting on a highway endpoint, and cost far more than that on the
+   * path whose *two* ends both fold. `reconstructPath` emits a grid step for the start node
+   * and for each highway target, so two cells joined only by a highway produce exactly
+   * `[grid(A), highway(A→B), grid(B)]` — the documented island-by-highway shape, and the
+   * shape of any reroute of a car standing on one endpoint towards the other. Both runs are
+   * lone, both folded away, and the route came out with no cells whatsoever: no lane, no
+   * leader, no follower, no current cell, no dependency, measured as a follower passing
+   * clean through a parked leader with 106.7px of overlap. `RouteSpan.entryCell` and
+   * `exitCell` are what make the fold a fold; `installRoute` refuses anything that still
+   * ends up with fewer than two cells.
    *
    * A lone grid cell with no highway on either side cannot be folded anywhere, and a
    * one-step path is not a journey: null.
@@ -527,15 +548,17 @@ export class TrafficAdapter {
       if (run.kind === 'highway') {
         const polyline = this.highwayPolyline(run.highwayId, run.from);
         if (polyline === null) return null;
-        if (pendingFold !== null) {
-          extendThrough(polyline, pendingFold, 'start');
-          pendingFold = null;
-        }
-        spans.push({
+        const span: HighwaySpan = {
           kind: 'highway',
           polyline,
           speedLimit: this.cfg.CAR_SPEED * this.cfg.HIGHWAY_SPEED_MULTIPLIER * TILE_SIZE,
-        });
+        };
+        if (pendingFold !== null) {
+          extendThrough(polyline, pendingFold, 'start');
+          span.entryCell = pendingFold;
+          pendingFold = null;
+        }
+        spans.push(span);
         continue;
       }
 
@@ -551,6 +574,7 @@ export class TrafficAdapter {
       const previous = spans[spans.length - 1];
       if (previous !== undefined && previous.kind === 'highway') {
         extendThrough(previous.polyline, lone, 'end');
+        previous.exitCell = lone;
         continue;
       }
       if (runs[i + 1]?.kind === 'highway') {

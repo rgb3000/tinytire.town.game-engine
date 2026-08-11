@@ -8,6 +8,7 @@ import type { Highway, PathStep } from '../../highways/types';
 import { RoadSystem } from '../RoadSystem';
 import { HighwaySystem } from '../HighwaySystem';
 import { defaultControlPoints } from '../../highways/highwayGeometry';
+import { Pathfinder } from '../../pathfinding/Pathfinder';
 import { sampleRoute, SegmentKind, STALL_WATCHDOG_SECONDS, TrafficEventKind } from '../../traffic';
 import type { Route } from '../../traffic';
 import type { GridPos } from '../../types';
@@ -1209,19 +1210,23 @@ describe('TrafficAdapter fold safety', () => {
     // Not truncated and no phantom absorbed at any of the four joints.
     expect(Math.abs(route.length - (2 * TILE + hwLength + TILE))).toBeLessThan(2);
     expect(route.cells).toEqual([
-      { gx: 0, gy: 0 }, { gx: 1, gy: 0 }, { gx: 2, gy: 0 }, { gx: 18, gy: 0 }, { gx: 19, gy: 0 },
+      { gx: 0, gy: 0 }, { gx: 1, gy: 0 }, { gx: 2, gy: 0 }, { gx: 10, gy: 0 },
+      { gx: 18, gy: 0 }, { gx: 19, gy: 0 },
     ]);
+    // The folded cell is recorded at the crossing's far end, and `cellDist` stays strictly
+    // increasing across it — the property `edgeIndexAt` and `cellStartArc` both rely on.
+    for (let i = 1; i < route.cellDist.length; i++) {
+      expect(route.cellDist[i], `cellDist[${i}]`).toBeGreaterThan(route.cellDist[i - 1]);
+    }
   });
 
-  it('omits only highway endpoints from route.cells, in every shape that folds', () => {
-    // This is the premise the fold's safety rests on. A folded cell is invisible to
-    // `carDependsOnCell`, so the player's road-delete check cannot protect it — but
-    // `Game.handleTryErase` erases every highway with an endpoint at the clicked cell
-    // *before* it can reach the road-removal branch, so the click that would exercise the
-    // gap destroys the crossing the car is riding in the same gesture, and the route is
-    // invalidated by the larger event regardless. That argument holds only while every
-    // omitted cell is a highway endpoint. If a future path shape folds an ordinary road
-    // cell, this fails and the argument must be redone.
+  it('keeps every path cell in route.cells, in every shape that folds', () => {
+    // The predecessor of this test asserted only that whatever the fold omitted was a
+    // highway endpoint. That is true of a fold and equally true of a *deletion*, and it is
+    // why the both-ends-fold route — every cell omitted, all of them endpoints, `cells`
+    // empty — passed it. What actually has to hold is that the fold costs no cells at all,
+    // and that whatever survives is enough for the lane index to hold: two cells make an
+    // edge, and an edge is what `LaneIndex.rebuild` keys a vehicle by.
     const grid = new Grid(20, 8);
     const roads = new RoadSystem(grid);
     for (const gx of [0, 1, 2, 10, 11]) roads.placeRoad(gx, 0);
@@ -1242,6 +1247,9 @@ describe('TrafficAdapter fold safety', () => {
       { name: 'leading', adapter, path: [{ kind: 'grid', pos: { gx: 2, gy: 0 } }, crossing, ...rowPath(10, 11, 0)] },
       // One road cell between two crossings.
       { name: 'between', ...twoCrossings() },
+      // Both ends fold: the shape the real pathfinder emits for an island reached only by
+      // highway. Before `entryCell`/`exitCell` this compiled to a route with no cells.
+      { name: 'both ends', adapter, path: [{ kind: 'grid', pos: { gx: 2, gy: 0 } }, crossing, { kind: 'grid', pos: { gx: 10, gy: 0 } }] },
     ];
 
     for (const shape of shapes) {
@@ -1249,22 +1257,148 @@ describe('TrafficAdapter fold safety', () => {
       expect(shape.adapter.installRoute(car, shape.path, false)).toBe(true);
       const route = shape.adapter.getRouteFor(car)!;
 
-      const endpoints = new Set<string>();
-      for (const step of shape.path) {
-        if (step.kind !== 'highway') continue;
-        endpoints.add(`${step.from.gx},${step.from.gy}`);
-        endpoints.add(`${step.to.gx},${step.to.gy}`);
-      }
-      const kept = new Set(route.cells.map(c => `${c.gx},${c.gy}`));
-      const omitted = shape.path
-        .filter(s => s.kind === 'grid')
-        .map(s => `${(s as { pos: GridPos }).pos.gx},${(s as { pos: GridPos }).pos.gy}`)
-        .filter(key => !kept.has(key));
+      // Premise: the shape really does fold, or every assertion below is about an ordinary
+      // route. A fold happens exactly where a grid run of one cell sits, and each of these
+      // has at least one.
+      const runs = gridRunLengths(shape.path);
+      expect(Math.min(...runs), `${shape.name} run lengths`).toBe(1);
 
-      // Premise: this shape really does fold something, or the assertion below is vacuous.
-      expect(omitted.length, shape.name).toBeGreaterThan(0);
-      for (const key of omitted) expect(endpoints.has(key), `${shape.name} omitted ${key}`).toBe(true);
+      const expected = shape.path
+        .filter(s => s.kind === 'grid')
+        .map(s => `${(s as { pos: GridPos }).pos.gx},${(s as { pos: GridPos }).pos.gy}`);
+      expect(route.cells.map(c => `${c.gx},${c.gy}`), shape.name).toEqual(expected);
+
+      // Two cells is one edge, and one edge is what makes a vehicle visible to `LaneIndex`
+      // — as a leader and as a follower. Below it there is no collision avoidance at all.
+      expect(route.cells.length, shape.name).toBeGreaterThanOrEqual(2);
+      for (let i = 1; i < route.cellDist.length; i++) {
+        expect(route.cellDist[i], `${shape.name} cellDist[${i}]`).toBeGreaterThan(route.cellDist[i - 1]);
+      }
     }
+  });
+
+  /** Lengths of the maximal runs of consecutive grid steps in a path. */
+  function gridRunLengths(path: PathStep[]): number[] {
+    const out: number[] = [];
+    let run = 0;
+    for (const step of path) {
+      if (step.kind === 'grid') { run++; continue; }
+      if (run > 0) out.push(run);
+      run = 0;
+    }
+    if (run > 0) out.push(run);
+    return out;
+  }
+
+  /**
+   * Two road cells, water between them, joined only by a highway — through the real
+   * pathfinder.
+   *
+   * The path is built by `Pathfinder`, not written by hand, and that is the point of the
+   * fixture. `buildSpans` was reviewed against synthetic `PathStep[]` and the both-ends-fold
+   * shape was judged unreachable; `reconstructPath` emits a grid step for the start node and
+   * one for every highway target, so two cells joined only by a crossing produce exactly
+   * `[grid(A), highway(A→B), grid(B)]` and nothing else. That is the documented
+   * island-by-highway journey, and it is also what any reroute of a car standing on one
+   * endpoint towards the other asks for.
+   */
+  function islandByHighway(): {
+    adapter: TrafficAdapter; path: PathStep[]; from: GridPos; to: GridPos; hwLength: number;
+  } {
+    const from = { gx: 2, gy: 0 };
+    const to = { gx: 10, gy: 0 };
+    const grid = new Grid(20, 8);
+    const roads = new RoadSystem(grid);
+    // Only the two endpoints are road. Nothing joins them on the ground, so A* has no
+    // choice but the crossing, and neither endpoint has a grid neighbour to pair with.
+    roads.placeRoad(from.gx, from.gy);
+    roads.placeRoad(to.gx, to.gy);
+    grid.recomputeIntersectionFlags();
+
+    const highways = new HighwaySystem();
+    const { cp1, cp2 } = defaultControlPoints(from, to);
+    const hw = highways.addHighway(from, to, cp1, cp2);
+
+    const pathfinder = new Pathfinder(grid, DEFAULT_GAME_CONSTANTS, highways);
+    const path = pathfinder.findPath(from, to);
+    if (path === null) throw new Error('fixture: the pathfinder found no island route');
+
+    return {
+      adapter: new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS, highways),
+      path, from, to, hwLength: hw.arcLength,
+    };
+  }
+
+  it('gets the real pathfinder to produce the both-ends-fold shape', () => {
+    const { path, from, to } = islandByHighway();
+    // The premise every assertion in the next test rests on: this shape is not synthetic.
+    expect(path.map(s => s.kind)).toEqual(['grid', 'highway', 'grid']);
+    expect((path[0] as { pos: GridPos }).pos).toEqual(from);
+    expect((path[2] as { pos: GridPos }).pos).toEqual(to);
+  });
+
+  it('gives a car on an island-by-highway route a leader to brake for', () => {
+    // With both runs folded away the route carried no cells, and `LaneIndex.rebuild` and
+    // `findLeader` both skip a route with fewer than two of them. The follower was blind and
+    // the leader invisible: measured at −106.7px of signed gap, a car driven clean through a
+    // parked one. Nothing else in the model would have caught it — the collision clamp in
+    // `step` is fed by the same index.
+    const { adapter, path, hwLength } = islandByHighway();
+
+    const leader = makeCar();
+    placeAt(adapter, leader, path, hwLength * 0.6);
+    adapter.setParked(leader, true);
+
+    const follower = makeCar();
+    expect(adapter.installRoute(follower, path, false)).toBe(true);
+
+    let minGap = Infinity;
+    for (let i = 0; i < 60 * 25; i++) {
+      adapter.update(DT);
+      minGap = Math.min(minGap, adapter.getArc(leader) - adapter.getArc(follower) - CAR_LEN);
+    }
+
+    // Premise: the follower really did drive up to the leader, so the bound is not vacuous.
+    expect(adapter.getArc(follower)).toBeGreaterThan(hwLength * 0.3);
+    expect(minGap).toBeGreaterThan(0);
+    // And it came to rest one standstill gap behind, which is what braking for a leader
+    // looks like as opposed to merely running out of route.
+    expect(adapter.getArc(follower)).toBeCloseTo(adapter.getArc(leader) - CAR_LEN - S0, 0);
+  });
+
+  it('refuses a route the lane index could not hold', () => {
+    // Belt and braces for precondition 5. Neither shape is one the pathfinder emits — it
+    // always closes a highway step with a grid step for the target — but neither is refused
+    // by anything in `buildRoute` either, and a car on one has no collision avoidance.
+    const { adapter, path, from } = islandByHighway();
+    const crossing = path[1];
+
+    // One cell survives the fold: an edge needs two.
+    expect(adapter.installRoute(makeCar(), [{ kind: 'grid', pos: from }, crossing], false)).toBe(false);
+    // None at all.
+    expect(adapter.installRoute(makeCar(), [crossing], false)).toBe(false);
+    // The control: the same crossing with both endpoints named is accepted.
+    expect(adapter.installRoute(makeCar(), path, false)).toBe(true);
+  });
+
+  it('leaves a car its old route when a reroute is refused', () => {
+    // `installRoute` returning false must not be a way to lose a route. `CarSystem.driving`
+    // repairs a car that has none by repathing it, and a car that had one and lost it
+    // mid-crossing repaths from a tile over water — no path, strand. Keeping the old route
+    // is what makes the refusal survivable.
+    const { adapter, path, from } = islandByHighway();
+    expect(adapter.installRoute(makeCar(), path, false)).toBe(true);
+
+    const car = makeCar();
+    expect(adapter.installRoute(car, path, false)).toBe(true);
+    for (let i = 0; i < 120; i++) adapter.update(DT);
+    const arc = adapter.getArc(car);
+    expect(arc).toBeGreaterThan(0);
+
+    expect(adapter.installRoute(car, [{ kind: 'grid', pos: from }, path[1]], true)).toBe(false);
+    expect(adapter.getRouteFor(car)).not.toBeNull();
+    expect(adapter.getArc(car)).toBe(arc);
+    expect(adapter.getRouteFor(car)!.cells.length).toBe(2);
   });
 });
 

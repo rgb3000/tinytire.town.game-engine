@@ -30,6 +30,12 @@ const JOINT_TOLERANCE = TILE_SIZE;
  * silently — a dropped span splices its neighbours together, and a wide joint becomes a
  * phantom straight line carrying the following span's speed limit and elevation profile.
  * Validation lives here, at the boundary, so the simulation carries no defensive branches.
+ *
+ * It does **not** refuse a route with fewer than two cells. A cell-less curve is a
+ * perfectly well-formed one — `sampleRoute` and the stepper's arrival test need nothing
+ * else — it is merely one no lane can hold, so a vehicle on it has no collision avoidance.
+ * That is a rule about which routes the *game* may put a car on, and it is enforced where
+ * the game is: `TrafficAdapter.installRoute`.
  */
 export function buildRoute(input: RouteInput): Route | null {
   const points: PixelPos[] = [];
@@ -82,6 +88,13 @@ export function buildRoute(input: RouteInput): Route | null {
       if (span.polyline.length < 2) return null;
       const offset = offsetRight(span.polyline, LANE_OFFSET);
       if (skipFirst && !joins(points[points.length - 1], offset[0])) return null;
+      // Recorded before the points are pushed, so it lands at the crossing's first arc
+      // rather than after it. A folded cell contributes no geometry and no segment — see
+      // `RouteSpan.entryCell` — only its place in `cells`/`cellDist`.
+      if (span.entryCell !== undefined && !prevSpanHadCells) {
+        cells.push(span.entryCell);
+        cellDist.push(base);
+      }
       for (let i = skipFirst ? 1 : 0; i < offset.length; i++) {
         points.push(offset[i]);
       }
@@ -93,7 +106,14 @@ export function buildRoute(input: RouteInput): Route | null {
         speedLimit: span.speedLimit,
         pendingDeletion: false,
       });
-      prevSpanHadCells = false;
+      if (span.exitCell !== undefined) {
+        cells.push(span.exitCell);
+        cellDist.push(end);
+      }
+      // A crossing that carried an exit cell has already recorded the joint the next span
+      // starts on, so that span must not record it twice — the same rule a grid span
+      // following a grid span obeys, and the reason `cellDist` stays strictly increasing.
+      prevSpanHadCells = span.exitCell !== undefined;
     }
   }
 
