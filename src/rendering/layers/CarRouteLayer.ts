@@ -134,8 +134,14 @@ export class CarRouteLayer {
    * this replaced — one reading `car.smoothPath`, one rebuilding tile centres from
    * `car.path` — into a single code path over the route the car is actually driving.
    *
-   * Callers must have rejected degenerate halves first ({@link drawableHalves}): a
-   * zero-length dashed line divides by zero in `computeLineDistances`.
+   * Callers must have rejected degenerate halves first ({@link drawableHalves}), and that
+   * applies to `dashed` and solid alike. `Line2` expands every segment into a screen-space
+   * quad from `normalize(ndcEnd.xy - ndcStart.xy)` (`LineMaterial.js`, "// direction",
+   * outside the `USE_DASH` guard), so two coincident points normalise a zero vector and
+   * every vertex of the quad comes out NaN. `computeLineDistances` is *not* the hazard —
+   * it is a running sum with no division in it, and gives a zero-length polyline a total
+   * distance of zero; the only thing that costs the dashed half is landing wholly inside
+   * one dash or one gap.
    */
   private addRouteLine(
     group: THREE.Group, points: PixelPos[], color: THREE.Color, dashed: boolean,

@@ -243,8 +243,13 @@ describe('CarRouteLayer route geometry', () => {
   it('floats the line above the ground at a constant height', () => {
     const f = fixture();
     f.driveTo(3);
-    const line = routeLines(hover(f))[0];
-    const start = line.geometry.attributes.instanceStart;
+    const lines = routeLines(hover(f));
+    // Indexed only after the premise is asserted: an overlay that drew nothing at all
+    // should fail here on the missing line, not on reading `geometry` off `undefined`.
+    expect(lines).toHaveLength(2);
+
+    const start = lines[0].geometry.attributes.instanceStart;
+    expect(start.count).toBeGreaterThan(0);
     for (let i = 0; i < start.count; i++) expect(start.getY(i)).toBe(1);
   });
 });
