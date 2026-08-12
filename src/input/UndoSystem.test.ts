@@ -15,7 +15,8 @@ import { describe, it, expect } from 'vitest';
 import { Grid } from '../core/Grid';
 import { UndoSystem } from './UndoSystem';
 import { GasStation } from '../entities/GasStation';
-import { CellType } from '../types';
+import { CellType, Direction, GameColor } from '../types';
+import type { Cell } from '../types';
 import type { Highway } from '../highways/types';
 
 function makeHighway(id: string): Highway {
@@ -98,6 +99,42 @@ describe('UndoSystem', () => {
     const cell = grid.getCell(6, 6)!;
     expect(cell.type).toBe(CellType.Empty);
     expect(cell.roadConnections).toBe(0);
+  });
+
+  /**
+   * …and *every* field of them, which the test above cannot show: it restores a cell to the
+   * empty state, and the empty state is what an unlisted field would be left at anyway.
+   *
+   * `deepCopyCell` names each field by hand, so a field added to `Cell` and forgotten there
+   * is silently dropped by undo — the exact shape of the loss this file was written about,
+   * one level down. This asserts against the populated cell's own key set rather than a
+   * remembered list, so a new field fails here until it is copied. (`_isTIntersection` was
+   * removed from `Cell` in the same change that added this; nothing else reads a cell field
+   * carefully enough to have noticed either way.)
+   */
+  it('restores every field of a snapshotted cell, not the ones we remembered', () => {
+    const grid = new Grid();
+    const undo = new UndoSystem(grid);
+    const populated: Cell = {
+      type: CellType.Road,
+      entityId: 'entity-1',
+      roadConnections: Direction.Up | Direction.Left | Direction.UpRight,
+      color: GameColor.Red,
+      connectorDir: Direction.Down,
+      pendingDeletion: true,
+      _isIntersection: true,
+    };
+    grid.setCell(6, 6, populated);
+
+    undo.beginGroup();
+    undo.snapshotCellAndNeighbors(6, 6);
+    grid.clearCell(6, 6);
+    undo.endGroup();
+    undo.undo();
+
+    const cell = grid.getCell(6, 6)!;
+    expect(cell).toEqual(populated);
+    expect(Object.keys(cell).sort()).toEqual(Object.keys(populated).sort());
   });
 
   it('ignores recorders called outside a group', () => {

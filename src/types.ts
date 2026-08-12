@@ -42,18 +42,6 @@ export const Direction = {
 } as const;
 export type Direction = (typeof Direction)[keyof typeof Direction];
 
-export const LaneId = {
-  HorizontalRight: 0,
-  HorizontalLeft: 1,
-  VerticalDown: 2,
-  VerticalUp: 3,
-  DiagDownRight: 4,
-  DiagUpLeft: 5,
-  DiagDownLeft: 6,
-  DiagUpRight: 7,
-} as const;
-export type LaneId = (typeof LaneId)[keyof typeof LaneId];
-
 export const BusinessRotation = {
   R0: 0,
   R90: 90,
@@ -85,6 +73,13 @@ export interface Cell {
   color: GameColor | null;
   connectorDir: Direction | null;
   pendingDeletion: boolean;
-  _isIntersection: boolean;   // cached: cardinalConnectionCount >= 3
-  _isTIntersection: boolean;  // cached: cardinalConnectionCount === 3
+  /**
+   * Cached `connectionCount(roadConnections) >= 3`, over all eight directions.
+   *
+   * Written only by `Grid.recomputeIntersectionFlags`, which owns the definition and the
+   * reason it counts diagonals. `_isTIntersection` sat beside this — `=== 3` exactly — until
+   * its sole reader was deleted with the old intersection code; nothing distinguishes a
+   * three-way from a four-way any more, so the field went with it.
+   */
+  _isIntersection: boolean;
 }

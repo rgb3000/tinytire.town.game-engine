@@ -72,7 +72,7 @@ describe('flushWorldDirty', () => {
     const world = makeWorld();
     const renderer = fakeRenderer();
 
-    // A crossroads: three cardinal connections is what makes a cell an intersection.
+    // A crossroads: three connections is what makes a cell an intersection.
     world.roadSystem.placeRoad(4, 4);
     const cell = world.grid.getCell(4, 4)!;
     cell.roadConnections = Direction.Up | Direction.Down | Direction.Left;
@@ -85,7 +85,6 @@ describe('flushWorldDirty', () => {
     expect(renderer.highway).toBe(0);
     // The designer used to skip this, so its road edits left the flags stale.
     expect(cell._isIntersection).toBe(true);
-    expect(cell._isTIntersection).toBe(true);
   });
 
   it('clears the highway flag and repaints highways only', () => {

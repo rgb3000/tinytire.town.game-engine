@@ -43,7 +43,6 @@ function deepCopyCell(cell: Cell): Cell {
     connectorDir: cell.connectorDir,
     pendingDeletion: cell.pendingDeletion,
     _isIntersection: cell._isIntersection,
-    _isTIntersection: cell._isTIntersection,
   };
 }
 

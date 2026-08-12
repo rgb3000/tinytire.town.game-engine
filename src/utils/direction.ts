@@ -1,4 +1,4 @@
-import { Direction, LaneId } from '../types';
+import { Direction } from '../types';
 import type { GridPos } from '../types';
 
 // --- Bitmask direction utilities ---
@@ -44,19 +44,20 @@ export function isDiagonalDir(dir: Direction): boolean {
   return (dir & 0xF0) !== 0;
 }
 
+/**
+ * How many of the eight directions a connection mask carries.
+ *
+ * All eight, deliberately. A `cardinalConnectionCount` sat next to this and masked to
+ * `0x0F`; `Grid.recomputeIntersectionFlags` used it, which made a diagonal three-way merge
+ * score 2 and escape being labelled a junction at all. Nothing wants a cardinal-only count,
+ * so there is no longer one to reach for by mistake.
+ */
 export function connectionCount(mask: number): number {
   // Popcount for 8-bit value
   let v = mask;
   v = (v & 0x55) + ((v >> 1) & 0x55);
   v = (v & 0x33) + ((v >> 2) & 0x33);
   return (v & 0x0F) + ((v >> 4) & 0x0F);
-}
-
-export function cardinalConnectionCount(mask: number): number {
-  const cardinal = mask & 0x0F; // Up|Down|Left|Right
-  let v = cardinal;
-  v = (v & 0x05) + ((v >> 1) & 0x05);
-  return (v & 0x03) + ((v >> 2) & 0x03);
 }
 
 export function forEachDirection(mask: number, callback: (dir: Direction) => void): void {
@@ -107,19 +108,6 @@ export function getDirection(from: GridPos, to: GridPos): Direction {
     return dx >= 0 ? Direction.Right : Direction.Left;
   }
   return dy >= 0 ? Direction.Down : Direction.Up;
-}
-
-export function directionToLane(dir: Direction): LaneId {
-  switch (dir) {
-    case Direction.Right: return LaneId.HorizontalRight;
-    case Direction.Left: return LaneId.HorizontalLeft;
-    case Direction.Down: return LaneId.VerticalDown;
-    case Direction.Up: return LaneId.VerticalUp;
-    case Direction.DownRight: return LaneId.DiagDownRight;
-    case Direction.UpLeft: return LaneId.DiagUpLeft;
-    case Direction.DownLeft: return LaneId.DiagDownLeft;
-    case Direction.UpRight: return LaneId.DiagUpRight;
-  }
 }
 
 export function directionAngle(dir: Direction): number {

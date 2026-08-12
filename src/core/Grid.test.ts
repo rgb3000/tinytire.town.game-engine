@@ -19,7 +19,6 @@ const OCCUPIED: Cell = {
   connectorDir: Direction.Down,
   pendingDeletion: true,
   _isIntersection: true,
-  _isTIntersection: true,
 };
 
 describe('Grid.clearCell', () => {
@@ -38,7 +37,6 @@ describe('Grid.clearCell', () => {
       connectorDir: null,
       pendingDeletion: false,
       _isIntersection: false,
-      _isTIntersection: false,
     });
     // Every key of a populated cell was considered, not just the ones we remembered.
     expect(Object.keys(cell).sort()).toEqual(Object.keys(OCCUPIED).sort());

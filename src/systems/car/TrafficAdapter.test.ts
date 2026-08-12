@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Grid } from '../../core/Grid';
 import { Car, CarState } from '../../entities/Car';
 import { TrafficAdapter } from './TrafficAdapter';
-import { CellType, GameColor } from '../../types';
+import { CellType, Direction, GameColor } from '../../types';
 import { DEFAULT_GAME_CONSTANTS } from '../../constants';
 import type { Highway, PathStep } from '../../highways/types';
 import { RoadSystem } from '../RoadSystem';
@@ -246,6 +246,29 @@ function crossGrid(): { grid: Grid; roads: RoadSystem } {
   return { grid, roads };
 }
 
+/**
+ * A three-way merge whose third arm is **diagonal**: the row `(1,5)…(9,5)`, joined at
+ * `(5,5)` by a run coming down from the north-west through `(2,2),(3,3),(4,4)`.
+ *
+ * `(5,5)` is wired `Left | Right | UpLeft`. That is three connections and a genuine merge,
+ * but only *two* of them are cardinal — which is why it was invisible to the whole safety
+ * model until `recomputeIntersectionFlags` counted all eight. Diagonals are not exotic
+ * here: `RoadSystem.connectRoads` takes any Chebyshev-1 neighbour, `RoadDrawer` places them
+ * from a diagonal drag, and `Pathfinder` walks `ALL_DIRECTIONS`.
+ */
+function diagonalMergeGrid(): { grid: Grid; roads: RoadSystem } {
+  const grid = new Grid(20, 14);
+  const roads = new RoadSystem(grid);
+  for (let gx = 1; gx <= 9; gx++) roads.placeRoad(gx, 5);
+  for (let gx = 1; gx < 9; gx++) roads.connectRoads(gx, 5, gx + 1, 5);
+  for (const [gx, gy] of [[2, 2], [3, 3], [4, 4]] as const) roads.placeRoad(gx, gy);
+  roads.connectRoads(2, 2, 3, 3);
+  roads.connectRoads(3, 3, 4, 4);
+  roads.connectRoads(4, 4, 5, 5);
+  grid.recomputeIntersectionFlags();
+  return { grid, roads };
+}
+
 function rowPath(from: number, to: number, gy: number): PathStep[] {
   const stepDir = to >= from ? 1 : -1;
   const out: PathStep[] = [];
@@ -283,6 +306,17 @@ function stopLineArc(route: Route, cellIndex: number): number {
   return (route.cellDist[cellIndex - 1] + route.cellDist[cellIndex]) / 2;
 }
 
+/** The far boundary of a junction cell, mirroring `cellEndArc` in `step.ts`. */
+function exitLineArc(route: Route, cellIndex: number): number {
+  return (route.cellDist[cellIndex] + route.cellDist[cellIndex + 1]) / 2;
+}
+
+/** The route path that approaches `(5,5)` diagonally in `diagonalMergeGrid`. */
+const DIAGONAL_APPROACH: PathStep[] = [
+  ...([[2, 2], [3, 3], [4, 4]] as const).map(([gx, gy]) => ({ kind: 'grid', pos: { gx, gy } } as PathStep)),
+  ...rowPath(5, 9, 5),
+];
+
 describe('TrafficAdapter fixtures', () => {
   it('builds the junction the junction tests depend on', () => {
     const { grid } = crossGrid();
@@ -301,6 +335,55 @@ describe('TrafficAdapter fixtures', () => {
     for (let i = 0; i < route.cells.length; i++) expect(route.cellDist[i]).toBeCloseTo(i * TILE, 6);
     expect(route.segments[5].kind).toBe(SegmentKind.Intersection);
     expect(stopLineArc(route, 5)).toBeCloseTo(180, 6);
+  });
+
+  /**
+   * The gap that hid a defect for a whole rebuild, closed at the layer that owns it.
+   *
+   * `invariants.test.ts` writes `SegmentKind.Intersection` onto its fixtures **by hand**, so
+   * every property it sweeps is conditional on the adapter agreeing with it about which
+   * cells are junctions — and nothing crossed that boundary. `Grid` said a diagonal merge
+   * was plain road, the sweeps never asked, and a three-way merge went unregulated by both
+   * halves of the model at once. This test is the crossing: a real `Grid`, wired by
+   * `RoadSystem`, through `TrafficAdapter`, asserting the kind that comes out the far end.
+   */
+  it('marks a diagonal three-way merge as a junction, on the route the adapter builds', () => {
+    const { grid } = diagonalMergeGrid();
+    const merge = grid.getCell(5, 5)!;
+
+    // The premise, stated as bits: three connections, of which only two are cardinal. Under
+    // a cardinal-only count this cell scores 2 and is indistinguishable from plain road.
+    expect(merge.roadConnections).toBe(Direction.Left | Direction.Right | Direction.UpLeft);
+    expect(merge._isIntersection).toBe(true);
+    // Its neighbours are not, or "junction" would just mean "road with a diagonal near it".
+    expect(grid.getCell(4, 5)!._isIntersection).toBe(false);
+    expect(grid.getCell(4, 4)!._isIntersection).toBe(false);
+    expect(grid.getCell(6, 5)!._isIntersection).toBe(false);
+
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const base = DEFAULT_GAME_CONSTANTS.CAR_SPEED * TILE;
+
+    // Both ways through the merge: the cardinal arm, and the diagonal one. The diagonal is
+    // the half that had never been driven through a junction at all — `maneuverChord`
+    // normalises diagonal unit vectors and `YIELD_TO_DIRECTION` maps all eight compass
+    // points, but nothing reached that code with a diagonal entry, because nothing could.
+    const straight = makeCar();
+    expect(adapter.installRoute(straight, rowPath(1, 9, 5), false)).toBe(true);
+    const across = adapter.getRouteFor(straight)!;
+    expect(across.cells[4]).toEqual({ gx: 5, gy: 5 });
+    expect(across.segments[4].kind).toBe(SegmentKind.Intersection);
+    expect(across.segments[4].speedLimit).toBeCloseTo(base * 0.7, 6);
+    expect(across.segments[3].speedLimit).toBeCloseTo(base, 6);
+
+    const diagonal = makeCar();
+    expect(adapter.installRoute(diagonal, DIAGONAL_APPROACH, false)).toBe(true);
+    const down = adapter.getRouteFor(diagonal)!;
+    expect(down.cells[3]).toEqual({ gx: 5, gy: 5 });
+    expect(down.segments[3].kind).toBe(SegmentKind.Intersection);
+    // …and it is the *only* junction on either route, so a test that trips on it below can
+    // only have tripped on this cell.
+    expect(across.segments.filter(s => s.kind === SegmentKind.Intersection).length).toBe(1);
+    expect(down.segments.filter(s => s.kind === SegmentKind.Intersection).length).toBe(1);
   });
 });
 
@@ -606,6 +689,92 @@ describe('TrafficAdapter junction admission', () => {
     expect(crossArrivals).toBeGreaterThanOrEqual(5);
     expect(arrivedAt).toBeGreaterThan(0);
     expect(arrivedAt).toBeLessThan(25);
+  });
+
+  /**
+   * A diagonal merge, driven.
+   *
+   * Two cars converge on `(5,5)` from different approaches and leave through the same cell,
+   * which makes their maneuvers conflict on `maneuversConflict`'s shared-exit rule. One of
+   * them enters diagonally, so this is the first thing in the suite to put a diagonal
+   * `entry` through `admit`, `maneuverChord` and `YIELD_TO_DIRECTION` by way of the real
+   * `_isIntersection` path rather than a hand-written `SegmentKind`.
+   *
+   * The following model cannot help here, and is not supposed to: a lane is the directed
+   * edge `(from-cell, direction)`, so the two cars sit in `laneKey(4,5,Right)` and
+   * `laneKey(4,4,DownRight)` and are invisible to one another as leader and follower right
+   * up to the cell centre — where both curves pass through the same point. Junction
+   * admission is the *only* thing keeping them apart, which is what makes the numbers below
+   * a measurement of it rather than of headway.
+   *
+   * Measured with the predicate reverted to a cardinal-only count, on this exact fixture:
+   * 47 ticks with both cars inside the box at once, a closest approach of **9.79px** against
+   * a 12px car length, and nobody ever held. Healthy: zero, 31.37px, and 34 ticks held.
+   */
+  it('serialises two cars converging on a diagonal three-way merge', () => {
+    const { grid } = diagonalMergeGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+
+    const straight = makeCar();
+    expect(adapter.installRoute(straight, rowPath(1, 9, 5), false)).toBe(true);
+    const diagonal = makeCar();
+    // 20px of head start, so the two reach their stop lines within a few frames of each
+    // other. The exact figure is not load-bearing — over a sweep of 0…32px the healthy
+    // model keeps them out of the box together at every step — but it is the offset at
+    // which the reverted predicate produces its clearest overlap.
+    placeAt(adapter, diagonal, DIAGONAL_APPROACH, 20);
+
+    const across = adapter.getRouteFor(straight)!;
+    const down = adapter.getRouteFor(diagonal)!;
+    const box = {
+      straight: { near: stopLineArc(across, 4), far: exitLineArc(across, 4) },
+      diagonal: { near: stopLineArc(down, 3), far: exitLineArc(down, 3) },
+    };
+
+    let together = 0;
+    let closest = Infinity;
+    let held = 0;
+    let straightInside = 0;
+    let diagonalInside = 0;
+    const live = new Map([[straight.id, straight], [diagonal.id, diagonal]]);
+
+    for (let i = 0; i < 60 * 20 && live.size === 2; i++) {
+      for (const event of adapter.update(DT)) {
+        if (event.kind !== TrafficEventKind.Arrived) continue;
+        const car = live.get(event.vehicleId);
+        // Despawned on arrival, as the adapter's contract requires — and here also so that
+        // the two cars parking near their shared destination cannot dominate the closest
+        // approach below with a number that has nothing to do with the merge.
+        if (car) { adapter.removeVehicle(car); live.delete(event.vehicleId); }
+      }
+      if (live.size < 2) break;
+
+      const arcS = adapter.getArc(straight);
+      const arcD = adapter.getArc(diagonal);
+      const insideS = arcS >= box.straight.near && arcS <= box.straight.far;
+      const insideD = arcD >= box.diagonal.near && arcD <= box.diagonal.far;
+      if (insideS) straightInside++;
+      if (insideD) diagonalInside++;
+      if (insideS && insideD) together++;
+      // One car stationary behind its own stop line while the other holds the box: this is
+      // what "yielded" means here, and it is the half that a no-overlap bound cannot see.
+      if (insideS && arcD < box.diagonal.near && adapter.getSpeed(diagonal) < 1) held++;
+      if (insideD && arcS < box.straight.near && adapter.getSpeed(straight) < 1) held++;
+
+      const ps = sampleRoute(across, arcS);
+      const pd = sampleRoute(down, arcD);
+      closest = Math.min(closest, Math.hypot(ps.x - pd.x, ps.y - pd.y));
+    }
+
+    // Premises. Both cars really did cross the merge, so the run covered it rather than
+    // deadlocking short of it.
+    expect(straightInside, 'the cardinal car occupied the merge').toBeGreaterThan(0);
+    expect(diagonalInside, 'and so did the diagonal one').toBeGreaterThan(0);
+
+    expect(together, 'ticks with both cars inside the merge at once').toBe(0);
+    expect(closest, 'closest the two ever came, in world pixels').toBeGreaterThan(CAR_LEN);
+    expect(held, 'ticks one spent stopped at its line while the other was inside')
+      .toBeGreaterThan(0);
   });
 });
 

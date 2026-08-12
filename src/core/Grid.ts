@@ -1,6 +1,6 @@
 import { GRID_COLS, GRID_ROWS, TILE_SIZE } from '../constants';
 import { type Cell, CellType, Direction, type GridPos, type PixelPos } from '../types';
-import { ALL_DIRECTIONS, CARDINAL_DIRECTIONS, DIRECTION_OFFSETS, cardinalConnectionCount } from '../utils/direction';
+import { ALL_DIRECTIONS, CARDINAL_DIRECTIONS, DIRECTION_OFFSETS, connectionCount } from '../utils/direction';
 
 export class Grid {
   readonly cols: number;
@@ -12,7 +12,7 @@ export class Grid {
     this.rows = rows;
     this.cells = new Array(this.cols * this.rows);
     for (let i = 0; i < this.cells.length; i++) {
-      this.cells[i] = { type: CellType.Empty, entityId: null, roadConnections: 0, color: null, connectorDir: null, pendingDeletion: false, _isIntersection: false, _isTIntersection: false };
+      this.cells[i] = { type: CellType.Empty, entityId: null, roadConnections: 0, color: null, connectorDir: null, pendingDeletion: false, _isIntersection: false };
     }
   }
 
@@ -49,7 +49,6 @@ export class Grid {
     cell.connectorDir = null;
     cell.pendingDeletion = false;
     cell._isIntersection = false;
-    cell._isTIntersection = false;
   }
 
   pixelToGrid(px: number, py: number): GridPos {
@@ -134,18 +133,24 @@ export class Grid {
     return { minGx, minGy, maxGx, maxGy };
   }
 
-  /** Recompute cached _isIntersection and _isTIntersection flags for all road cells */
+  /**
+   * Recompute the cached `_isIntersection` flag for every road cell.
+   *
+   * The count is over **all eight** connections, not the four cardinal ones. Diagonal roads
+   * are first-class here — `RoadSystem.connectRoads` accepts any Chebyshev-1 neighbour,
+   * `RoadDrawer` places them deliberately and `Pathfinder` traverses them — so a cell wired
+   * `Left | Right | UpLeft` is a genuine three-way merge. Counting cardinals only scored it
+   * 2 and left it plain road, which put it outside junction admission entirely; and the
+   * following model cannot see the merge either, because a lane is a *directed* edge
+   * (`laneKey`) and the two converging cars sit in different buckets until each has passed
+   * the cell centre. Both safety mechanisms missed the same ground, which is exactly the
+   * thing the two of them together are supposed to make impossible.
+   */
   recomputeIntersectionFlags(): void {
     for (let i = 0; i < this.cells.length; i++) {
       const cell = this.cells[i];
-      if (cell.type === CellType.Road) {
-        const count = cardinalConnectionCount(cell.roadConnections);
-        cell._isIntersection = count >= 3;
-        cell._isTIntersection = count === 3;
-      } else {
-        cell._isIntersection = false;
-        cell._isTIntersection = false;
-      }
+      cell._isIntersection = cell.type === CellType.Road
+        && connectionCount(cell.roadConnections) >= 3;
     }
   }
 }
