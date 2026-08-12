@@ -13,9 +13,10 @@ export interface Constraint {
 /**
  * Identity of a junction, packed from its cell coordinates the same way `laneKey` packs
  * its own. Admission is keyed by it rather than by vehicle id alone: `_isIntersection` is
- * a connection count, so two junction cells can sit side by side, and a car cleared to
- * cross one must still stop at the next. One definition, so admission and the stop line
- * cannot drift apart.
+ * a connection count over all eight directions, so two junction cells can sit side by side
+ * — and a diagonal arm makes one out of a cell that looks like plain road on the cardinal
+ * axes — and a car cleared to cross one must still stop at the next. One definition, so
+ * admission and the stop line cannot drift apart.
  */
 export function junctionKey(gx: number, gy: number): number {
   return gx | (gy << 8);
@@ -70,7 +71,7 @@ function nextJunctionCell(route: Route, arc: number): number {
  * - Keyed by junction, because a car inside junction A is a candidate for A while the
  *   junction ahead of it is already B. A flag alone would wave it out of A straight into
  *   B's cross traffic without yielding, and adjacent junction cells are ordinary in a grid
- *   city since a cell is an intersection by connection count.
+ *   city since a cell is an intersection by connection count over all eight directions.
  * - A **set** per junction, and one vehicle may legitimately appear under two keys at
  *   once: it holds A reserved while it physically occupies the box and is at the same time
  *   an entrant for B. That is the fact a vehicle-keyed map could not express, and without

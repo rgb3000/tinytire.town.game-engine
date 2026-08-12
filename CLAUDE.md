@@ -117,13 +117,34 @@ Three properties are worth knowing, because none is visible from any one file:
   two cars converging on a cell from different approaches are invisible to each other as
   leader and follower — but a merge implies three or more connections at that cell, which
   makes it an intersection, and junction admission serialises them there. Neither mechanism
-  is complete alone. Together they leave **one** gap, and it is deliberate: a route that
-  *begins* inside a junction cell has no approach to yield on and no entry direction, so
-  `step.ts` offers no candidate for it and imposes no stop line, and the vehicle crosses
-  unregulated. `TrafficAdapter.describeCell` strips `SegmentKind.Intersection` on a span
-  start for the same reason. Both sites say so. It is bounded — one cell, at the start of a
-  route only — and consistent, so it cannot strand anybody; do not assume the coverage is
-  total when deciding whether some new path needs regulating.
+  is complete alone.
+
+  "Three or more connections" is counted over **all eight** directions, in
+  `Grid.recomputeIntersectionFlags`. It was cardinal-only for the whole of this rebuild,
+  which meant a cell wired `Left | Right | UpLeft` — a genuine three-way merge, since
+  diagonals are first-class in `RoadSystem`, `RoadDrawer` and `Pathfinder` alike — scored 2,
+  stayed plain road, and fell outside *both* mechanisms at once. Measured on the fixture in
+  `TrafficAdapter.test.ts`: two cars sat inside the same merge cell for 47 consecutive ticks
+  and closed to 9.79px, against a 12px car length. Do not reintroduce a cardinal-only count.
+
+  What the pair still does not cover, in decreasing order of how much it matters:
+
+  - A route that **begins inside a junction cell** has no approach to yield on and no entry
+    direction, so `step.ts` offers no candidate for it and imposes no stop line, and the
+    vehicle crosses unregulated. `TrafficAdapter.describeCell` strips
+    `SegmentKind.Intersection` on a span start for the same reason, which also covers the
+    second shape of it: a junction opening the grid span *after* a highway crossing. Both
+    sites say so. It is bounded — one cell, at the start of a route — and consistent, so it
+    cannot strand anybody.
+  - **Two diagonal roads that cross without sharing a cell** — `(3,3)-(4,4)` against
+    `(4,3)-(3,4)` — intersect geometrically while touching no common cell, so no junction
+    exists to admit at and no lane is shared. Nothing in `src/traffic/` prevents this; what
+    prevents it is `isDiagonalCutAllowed` in `RoadPlacementPathfinder`, which both
+    `RoadDrawer` and the road-placement A* consult, so it cannot be drawn in play. It can
+    still be *loaded*: `applyMapConfig` restores a saved `connections` mask verbatim without
+    re-checking, so a hand-edited map file could carry one.
+
+  Do not assume the coverage is total when deciding whether some new path needs regulating.
 - **Junction admission is greedy over a total order**, which is why it cannot deadlock and
   needs no escape timeout. *Rechts vor links* shapes the order but cannot cycle it. The old
   model's `INTERSECTION_DEADLOCK_TIMEOUT` and `UNIVERSAL_STUCK_TIMEOUT` existed to break

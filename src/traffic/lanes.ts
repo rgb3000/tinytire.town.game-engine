@@ -15,10 +15,11 @@ const DIR_INDEX: Record<number, number> = {
  * direction of travel.
  *
  * The key deliberately does not involve the *observer's* heading, which is what
- * `CarLeaderIndex` did — it bucketed by `directionToLane(dir)` computed from whoever was
- * looking, so a car that entered a tile from a different approach landed in a different
+ * `CarLeaderIndex` did — it bucketed by an undirected side-of-road id computed from whoever
+ * was looking, so a car that entered a tile from a different approach landed in a different
  * bucket and was invisible. Keying on the edge itself makes every car on that ground
- * visible to every other car on it.
+ * visible to every other car on it. (That id was `LaneId`, a second and conflicting
+ * definition of this file's central noun; it and `directionToLane` went with the index.)
  */
 export function laneKey(gx: number, gy: number, dir: Direction): number {
   return gx | (gy << 8) | (DIR_INDEX[dir] << 16);
@@ -142,9 +143,18 @@ export class LaneIndex {
    * geometry was tightest.
    *
    * A vehicle converging on the same cell from a different approach is on a different edge
-   * and is deliberately not found here. That cell is necessarily an intersection, and
-   * junction admission serialises the two — the lane model and the junction model only
-   * cover the space together.
+   * and is deliberately not found here, and there are exactly two shapes that can be.
+   *
+   * If the two are **merging** — different approaches, and at least one of them leaves by a
+   * third neighbour — that cell carries three or more connections, which makes it an
+   * intersection, and junction admission serialises them. The count is over all eight
+   * directions (`Grid.recomputeIntersectionFlags`), so a diagonal arm counts like any other;
+   * it was cardinal-only for the whole of this rebuild, which left a diagonal merge outside
+   * both mechanisms at once. If they are **not** merging, they are the two directions of one
+   * two-way stretch, and `LANE_OFFSET` puts them on opposite sides of the road.
+   *
+   * So the lane model and the junction model cover the space only together, and not quite
+   * all of it: the residue is listed under Traffic in `CLAUDE.md`.
    */
   findLeader(world: TrafficWorld, vehicle: Vehicle): LeaderInfo | null {
     const route = world.routes.get(vehicle.routeId);

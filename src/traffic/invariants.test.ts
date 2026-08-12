@@ -30,6 +30,16 @@
  * 5. **Violations are collected, not asserted per car per tick.** 3600 ticks × 25 cars is
  *    90 000 assertions per scenario; collecting the first few with full context and asserting
  *    once at the end is both faster and a far better failure message.
+ * 6. **These fixtures write `SegmentKind.Intersection` by hand, and that is a real limit on
+ *    what they prove.** `src/traffic/` is pure and cannot see a `Grid`, so a sweep here is
+ *    conditional on the adapter agreeing about which cells are junctions — and for the whole
+ *    of this rebuild it did not. `Grid` counted only the four cardinal connections, so a
+ *    diagonal three-way merge was labelled plain road, went to neither the junction model nor
+ *    the lane model, and every sweep below passed because none of them ever asked. The
+ *    crossing that would have caught it lives where both sides are visible, in
+ *    `TrafficAdapter.test.ts`: `marks a diagonal three-way merge as a junction…` and
+ *    `serialises two cars converging on a diagonal three-way merge`. A new shape of cell
+ *    belongs there first, and only then in a fixture here.
  */
 import { describe, it, expect } from 'vitest';
 import { mulberry32 } from '../utils/rng';

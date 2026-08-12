@@ -70,10 +70,21 @@ function approachingJunctionCell(route: Route, arc: number): number {
 /**
  * Whether the cell beyond a junction has room for one more car.
  *
- * This is the don't-block-the-intersection rule, and it is what stops a ring of junctions
- * gridlocking: a car never enters a junction it cannot leave, so the far side always
- * drains. The old model had no notion of this at all — cars entered and stopped dead
- * inside, blocking every crossing stream until the deadlock timeout fired.
+ * This is the don't-block-the-intersection rule, and it is what keeps a ring of junctions
+ * from gridlocking under its own traffic: a car is not let into a box whose far side is
+ * already at a standstill. The old model had no notion of this at all — cars entered and
+ * stopped dead inside, blocking every crossing stream until the deadlock timeout fired.
+ *
+ * It is a **rule about admission, not a guarantee that the far side drains**, and three
+ * paths through the model make the stronger claim false. A junction that ends a route has
+ * no exit cell and returns `true` unconditionally. A car that is *moving* through the exit
+ * cell does not count as occupying it, deliberately — counting it turned a plain corridor's
+ * stopped vehicle-ticks from 69 to 3999, which `expectFreeFlowing` in `invariants.test.ts`
+ * now guards. And a candidate already `inside` is exempt in `admit`, because stopping a car
+ * mid-junction is the very thing this rule exists to prevent. On top of those, the game may
+ * park a car anywhere at all — `TrafficAdapter.setParked` — including in an exit cell, and
+ * a queue behind a parked car is *supposed* to stand still for ever. What the rule buys is
+ * that no car adds itself to that jam from inside a junction.
  */
 function exitHasRoom(world: TrafficWorld, route: Route, junctionCell: number): boolean {
   const exitCell = route.cells[junctionCell + 1];
@@ -99,7 +110,7 @@ function exitHasRoom(world: TrafficWorld, route: Route, junctionCell: number): b
  * `obstacles.ts` looks strictly ahead), so if it is offered only to A it can never be
  * admitted to B, halts ~`s0` short of B's line while still inside A, and stays there
  * forever — blocking A's cross traffic. Adjacent junction cells are ordinary:
- * `_isIntersection` is `cardinalConnectionCount >= 3`.
+ * `_isIntersection` is `connectionCount >= 3`, over all eight directions.
  *
  * So: the junction it is **inside** gets it as `inside: true`, which keeps A reserved
  * while the car physically occupies the box; the junction **ahead** gets it as an
@@ -236,8 +247,8 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
   // exactly that set per junction, and because a car mid-crossing A while entering B is
   // admitted to *both* — which a vehicle-keyed map cannot express. Membership in a flat
   // set would instead mean "exempt from every stop line ahead": adjacent cells can both be
-  // junctions (`_isIntersection` is `cardinalConnectionCount >= 3`), so a car admitted to A
-  // would skip B's stop line and exit straight into B's cross traffic.
+  // junctions (`_isIntersection` is `connectionCount >= 3`, over all eight directions), so a
+  // car admitted to A would skip B's stop line and exit straight into B's cross traffic.
   //
   // `admit` is called once **per junction cell**. Feeding two junctions' candidates into
   // one call would compute conflict geometry between maneuvers through unrelated cells.
