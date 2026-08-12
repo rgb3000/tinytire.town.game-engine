@@ -47,7 +47,7 @@ import { step } from './step';
 import { Direction } from '../types';
 import { SegmentKind, VehicleMode, TrafficEventKind, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
-import { DEFAULT_IDM } from './tuning';
+import { DEFAULT_IDM, STOPPED_SPEED } from './tuning';
 import { CAR_LENGTH, TILE_SIZE } from '../constants';
 
 const DT = 1 / 60;
@@ -351,9 +351,11 @@ describe('step', () => {
     addRoute(w, span('ends', [[0, 3, R], [1, 3, R], [2, 3, R], [3, 3, X]]));
     addRoute(w, span('down', [[3, 1, R], [3, 2, R], [3, 3, X], [3, 4, R], [3, 5, R]]));
 
-    // `holder` is stopped inside the junction and stays there, so it holds the box.
+    // `holder` is stopped inside the junction and stays there, so it holds the box. The
+    // blocker sits close enough that the holder's rest — one car length plus `s0` behind
+    // it — stays inside the cell's [60,100] extent whatever `s0` is tuned to.
     w.vehicles.push(car('holder', 'down', 85));
-    w.vehicles.push(car('blocker', 'down', 120, 0, VehicleMode.Parked));
+    w.vehicles.push(car('blocker', 'down', 110, 0, VehicleMode.Parked));
     w.vehicles.push(car('arriver', 'ends', 0, 40));
 
     for (let i = 0; i < 900; i++) step(w, DT);
@@ -396,7 +398,9 @@ describe('step', () => {
     for (let i = 0; i < 1200; i++) step(w, DT);
 
     const net = w.vehicles[1].arcDistance - w.vehicles[0].arcDistance - CAR_LENGTH;
-    expect(net).toBeLessThan(DEFAULT_IDM.s0);
+    // Which side of s0 the integrator settles on depends on the tuning — measured, 0.28px
+    // inside at s0 = 14 and a rounding error outside at s0 = 4 — so the band admits both.
+    expect(net).toBeLessThan(DEFAULT_IDM.s0 + 1e-9);
     expect(net).toBeGreaterThan(DEFAULT_IDM.s0 * 0.9);
   });
 
@@ -527,8 +531,10 @@ describe('step: junction admission across two adjacent junctions', () => {
     for (let i = 0; i < 300; i++) step(w, DT);
 
     const x = find(w, 'x');
-    // Premise: it really is waiting inside A, not still rolling.
-    expect(x.speed).toBeLessThan(1e-3);
+    // Premise: it really is waiting inside A, not still rolling. Judged by the model's own
+    // stopped threshold: from outside the equilibrium the integrator's tail is asymptotic,
+    // so a hard zero is a statement about run length rather than about waiting.
+    expect(x.speed).toBeLessThan(STOPPED_SPEED);
     expect(x.arcDistance).toBeGreaterThan(100);
     expect(x.arcDistance).toBeLessThan(140);
 
@@ -637,9 +643,10 @@ describe('step: junction admission across two adjacent junctions', () => {
     expect(jr.cellDist[2]).toBeCloseTo(2 * TILE_SIZE, 9);
     expect(segmentAt(jr, 80)!.kind).toBe(SegmentKind.Intersection);
 
-    // `x` sits in the far half of the junction cell, held there by a parked car beyond it.
+    // `x` sits in the far half of the junction cell, held there by a parked car beyond it —
+    // near enough that x's rest, a car length plus `s0` behind it, stays short of arc 100.
     w.vehicles.push(car('x', 'joint', 90));
-    w.vehicles.push(car('parked', 'joint', 120, 0, VehicleMode.Parked));
+    w.vehicles.push(car('parked', 'joint', 112, 0, VehicleMode.Parked));
     w.vehicles.push(car('cross', 'down', 20, 20));
 
     for (let i = 0; i < 600; i++) step(w, DT);

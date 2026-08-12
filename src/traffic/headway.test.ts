@@ -124,13 +124,16 @@ describe('idmAcceleration', () => {
   it('brakes less the faster the leader is moving, at a fixed gap', () => {
     // Below the speed limit, so the free-road term leaves room for the sign to turn over.
     const v = V_ROAD * 0.75;
-    const gap = 45;
+    // Exactly the desired gap behind a *stopped* leader — derived, not hard-coded, so the
+    // sign structure survives a retune of `s0`. At this gap the interaction term behind the
+    // stopped leader is the full -a, far below the free-road surplus, so braking is
+    // guaranteed; behind a leader at the limit the anticipation term is negative and the
+    // same gap is roomy, so the sweep crosses zero rather than merely shifting.
+    const gap = P.s0 + v * P.T + (v * v) / (2 * Math.sqrt(P.a * P.b));
     const accs = [0, 10, 20, 30, 40].map((ls) => idmAcceleration(v, V_ROAD, gap, ls, P));
     for (let i = 1; i < accs.length; i++) {
       expect(accs[i]).toBeGreaterThan(accs[i - 1]);
     }
-    // 45px is inside the desired gap behind a stopped leader and outside it behind one
-    // matching the speed limit, so the sweep crosses zero rather than merely shifting.
     expect(accs[0]).toBeLessThan(0);
     expect(accs[accs.length - 1]).toBeGreaterThan(0);
   });
@@ -141,21 +144,29 @@ describe('idmAcceleration', () => {
     // is invisible unless the closing speed is nonzero, so pin it with an exact value at a
     // leader that is moving but slower — the loose bracket on the clamp threshold below
     // tolerates `b` anywhere from roughly 28 to 694.
+    //
+    // The parameters are **frozen locally**, not read from `DEFAULT_IDM`: the point of this
+    // test is a hand-computed cross-check of the algebra, and a hand computation is only a
+    // cross-check against the numbers it was done with. Reading the live tuning here made
+    // the test fire on every legitimate retune of `s0` — a tuning value with no bearing on
+    // where `b` sits in the formula.
+    const frozen = { s0: TILE_SIZE * 0.35, T: 0.6, a: TILE_SIZE, b: TILE_SIZE * 1.5, delta: 4 };
     const v = V_ROAD;
     const gap = 60;
     const leaderSpeed = 20;
 
     // At the desired speed the free-road term is exactly zero, so the whole result is the
     // interaction term: -a * (s*/s)^2 with s* = s0 + v*T + v*dv / (2*sqrt(a*b)).
-    const sStar = P.s0 + v * P.T + (v * (v - leaderSpeed)) / (2 * Math.sqrt(P.a * P.b));
+    const sStar = frozen.s0 + v * frozen.T
+      + (v * (v - leaderSpeed)) / (2 * Math.sqrt(frozen.a * frozen.b));
     const ratio = sStar / gap;
-    const expected = -P.a * ratio * ratio;
+    const expected = -frozen.a * ratio * ratio;
 
-    // Cross-checked by hand against the default parameters so this derivation cannot drift
+    // Cross-checked by hand against the frozen parameters so this derivation cannot drift
     // silently: 2*sqrt(a*b) = 97.9796, s* = 46.1650, acc = -23.6800. Swapping `b` for `a`
     // in the denominator gives s* = 48 and -25.6 — a difference of 1.92.
     expect(expected).toBeCloseTo(-23.68, 2);
-    expect(idmAcceleration(v, V_ROAD, gap, leaderSpeed, P)).toBeCloseTo(expected, 9);
+    expect(idmAcceleration(v, V_ROAD, gap, leaderSpeed, frozen)).toBeCloseTo(expected, 9);
   });
 
   it('never lets the desired gap fall below s0, however fast the leader escapes', () => {

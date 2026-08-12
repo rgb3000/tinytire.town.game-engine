@@ -480,7 +480,13 @@ describe('nearestConstraint', () => {
   it('carries the leader speed, which a min of two multipliers cannot express', () => {
     const limit = 60;
     const followerSpeed = TILE_SIZE;
-    const gap = 50;
+    // Midway between the desired gap behind a leader matching the follower's speed and the
+    // desired gap behind a stopped one — derived so the sign split below is structural
+    // rather than an accident of the current `s0`.
+    const sMatched = DEFAULT_IDM.s0 + followerSpeed * DEFAULT_IDM.T;
+    const sStopped = sMatched
+      + (followerSpeed * followerSpeed) / (2 * Math.sqrt(DEFAULT_IDM.a * DEFAULT_IDM.b));
+    const gap = (sMatched + sStopped) / 2;
     const leaderArc = gap + CAR_LENGTH;
 
     const build = (leaderSpeed: number) => {

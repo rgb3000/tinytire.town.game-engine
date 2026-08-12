@@ -13,7 +13,9 @@ import type { IdmParams } from './headway';
  * is correct, not that it feels right at one tile per second.
  */
 export const DEFAULT_IDM: IdmParams = {
-  s0: TILE_SIZE * 0.35,   // 14px — standstill gap, a little over one car length (12px)
+  s0: TILE_SIZE * 0.1,    // 4px — standstill gap between bumpers; queues pack close to
+                          // bumper-to-bumper (a third of the 12px car length). Was 0.35,
+                          // which read as each car keeping a whole car length of daylight.
   T: 0.6,                 // desired time headway, seconds
   a: TILE_SIZE * 1.0,     // 40px/s² — reaches one tile/sec in about a second
   b: TILE_SIZE * 1.5,     // 60px/s² — comfortable braking
@@ -26,12 +28,13 @@ export const MAX_DECELERATION = TILE_SIZE * 4;
 /**
  * How far behind the junction boundary a waiting car's *centre* comes to rest, px.
  *
- * A stop line is a line, not a car: parking `s0` behind it — the right thing behind a
- * physical leader — left a waiting car's nose 8px outside the boundary and a full 20px of
- * empty asphalt short of the crossing pavement (`ROAD_HALF_WIDTH` is 8px from the junction
- * centre), which reads as a car refusing to pull up. `nearestConstraint` therefore places
- * the stop constraint `s0 - STOP_LINE_SETBACK` *past* the boundary, so the IDM equilibrium
- * rest — constraint minus `s0` — lands here, independent of any later retune of `s0`.
+ * A stop line is a line, not a car: parking `s0` behind it, the right thing behind a
+ * physical leader, is arbitrary before a painted line — with the original `s0` of 14px it
+ * left a waiting car's nose a full 20px of empty asphalt short of the crossing pavement
+ * (`ROAD_HALF_WIDTH` is 8px from the junction centre), reading as a car refusing to pull
+ * up. `nearestConstraint` therefore offsets the stop constraint by `s0 - STOP_LINE_SETBACK`
+ * (either side of the boundary — the sign follows the tuning), so the IDM equilibrium
+ * rest — constraint minus `s0` — lands here, independent of any retune of `s0`.
  *
  * Bracketed on both sides:
  *
@@ -40,11 +43,10 @@ export const MAX_DECELERATION = TILE_SIZE * 4;
  *   competitor with a better claim stamps in; below this margin it crosses the boundary
  *   while stopping, flips `inside`, and is granted the absolute priority it was just
  *   denied. (A map raising `CAR_SPEED` past ~1.1 tiles/s erodes the margin — at 6px the
- *   breach speed is 44px/s — but the old `s0` margin of 14px was itself breached at
- *   67px/s, so the hazard is older than this constant. The integrator's own settle error
- *   is 0.281px, an order of magnitude inside the margin.)
- * - **Upper bound `s0` (14px)** — at which the constant cancels and the car parks a
- *   car-length of daylight before the line, the very complaint this exists to fix.
+ *   breach speed is 44px/s. The integrator's own settle error is 0.281px, an order of
+ *   magnitude inside the margin.)
+ * - **Upper bound: purely visual.** Every pixel of setback is daylight between the resting
+ *   nose and the line; 14px of it was the original complaint this constant exists to fix.
  *
  * `CAR_LENGTH / 2` = 6px rests the nose exactly on the boundary: visually at the line,
  * still a pixel of margin over the worst forced stop.

@@ -232,7 +232,7 @@ const DT = 1 / 60;
 const TILE = 40;
 const LANE = TILE * 0.12;
 /** `DEFAULT_IDM.s0`, restated so a change to the tuning shows up as a failing number here. */
-const S0 = TILE * 0.35;
+const S0 = TILE * 0.1;
 const CAR_LEN = TILE * 0.3;
 
 function crossGrid(): { grid: Grid; roads: RoadSystem } {
@@ -622,7 +622,9 @@ describe('TrafficAdapter junction admission', () => {
     for (let i = 0; i < 60 * 12; i++) adapter.update(DT);
 
     expect(adapter.getArc(approaching)).toBeLessThan(180);
-    expect(adapter.getSpeed(approaching)).toBe(0);
+    // Not exactly zero: settling from outside the equilibrium, the integrator's tail is
+    // asymptotic, so "standing" is a bound far below STOPPED_SPEED rather than a hard zero.
+    expect(adapter.getSpeed(approaching)).toBeLessThan(1e-6);
   });
 
   it('lets a car into a junction whose exit cell holds a car that is moving', () => {
@@ -861,7 +863,7 @@ describe('TrafficAdapter arrival and despawn', () => {
     // of the half-tile band in which arrival is declared, for the remaining 22 seconds.
     expect(adapter.getArc(follower)).toBeLessThan(route.length - TILE / 2);
     expect(adapter.getArc(follower)).toBeGreaterThan(route.length - 2 * TILE);
-    expect(adapter.getSpeed(follower)).toBe(0);
+    expect(adapter.getSpeed(follower)).toBeLessThan(1e-6);
   });
 
   it('clears the road when the caller despawns on the arrival event', () => {
@@ -1041,7 +1043,7 @@ describe('TrafficAdapter configuration', () => {
     const fastest = DEFAULT_GAME_CONSTANTS.CAR_SPEED * DEFAULT_GAME_CONSTANTS.HIGHWAY_SPEED_MULTIPLIER;
     expect(fastest).toBe(2);
     const stopping = (fastest * TILE) ** 2 / (2 * TILE * 4) + S0;
-    expect(stopping).toBeCloseTo(34, 6);
+    expect(stopping).toBeCloseTo(24, 6);
     // Two edges, not three. The scan starts on the car's own edge, which contributes nothing
     // when the car is at its far end, so 80px is what is guaranteed and 120px is the best case.
     expect(2 * TILE / stopping).toBeGreaterThan(2.3);
@@ -1051,12 +1053,12 @@ describe('TrafficAdapter configuration', () => {
     const grid = new Grid(20, 5);
     roadRow(grid, 6);
     // The ceiling is sqrt(2 * MAX_DECELERATION * (lookahead - s0)) with lookahead = 80px, so
-    // 145.33px/s = 3.633 tiles/sec of effective top speed, which at the default multiplier of
-    // 2 is a CAR_SPEED of 1.816. Measured against 120px the answer was 4.60 — permissive, in
+    // 155.95px/s = 3.899 tiles/sec of effective top speed, which at the default multiplier of
+    // 2 is a CAR_SPEED of 1.949. Measured against 120px the answer was 4.66 — permissive, in
     // the one direction an assertion that exists to refuse an unsafe map must not err.
-    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 1.8 })).not.toThrow();
-    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 1.9 }))
-      .toThrow(/safe ceiling is 3\.63 tiles\/sec/);
+    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 1.9 })).not.toThrow();
+    expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 2.0 }))
+      .toThrow(/safe ceiling is 3\.90 tiles\/sec/);
     // A multiplier below one cannot make a fast grid speed safe.
     expect(() => new TrafficAdapter(grid, { ...DEFAULT_GAME_CONSTANTS, CAR_SPEED: 6, HIGHWAY_SPEED_MULTIPLIER: 0.5 }))
       .toThrow(/CAR_SPEED 6/);

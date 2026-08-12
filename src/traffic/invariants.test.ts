@@ -47,7 +47,7 @@ import { buildRoute, sampleRoute } from './route';
 import { step } from './step';
 import { SegmentKind, TrafficEventKind, VehicleMode, createWorld } from './types';
 import type { RouteInput, TrafficWorld, Vehicle } from './types';
-import { DEFAULT_IDM, MAX_DECELERATION, SIMULTANEOUS_EPS, STOPPED_SPEED } from './tuning';
+import { DEFAULT_IDM, MAX_DECELERATION, SIMULTANEOUS_EPS, STOPPED_SPEED, STOP_LINE_SETBACK } from './tuning';
 import { CAR_LENGTH, TILE_SIZE } from '../constants';
 
 const DT = 1 / 60;
@@ -659,7 +659,7 @@ describe('traffic invariants', () => {
     const w = world.vehicles.find(v => v.id === 'W')!;
     // Held at the junction's stop line — the midpoint between cell centres, arc 180 — and
     // not inside the box. Asserted as a range because IDM parks `s0` short of the line.
-    expect(w.arcDistance).toBeGreaterThan(180 - DEFAULT_IDM.s0 - 1);
+    expect(w.arcDistance).toBeGreaterThan(180 - STOP_LINE_SETBACK - 1);
     expect(w.arcDistance).toBeLessThan(180);
   });
 
