@@ -776,6 +776,53 @@ describe('TrafficAdapter junction admission', () => {
     expect(held, 'ticks one spent stopped at its line while the other was inside')
       .toBeGreaterThan(0);
   });
+
+  it('keeps four two-way streams flowing through one junction indefinitely', () => {
+    // The freeze this pins: the two directions of a two-way road share their cells, and a
+    // car waiting at a stop line rests inside the cell that is the *oncoming* car's exit.
+    // When exit room was asked of the cell rather than the lane, any moment that left two
+    // opposing cars stopped at the same junction locked both permanently — and one crossing
+    // stream forcing one transient yield was enough to produce that moment, so a live board
+    // froze within a minute of ordinary play. Nothing in the pure-model sweeps could see
+    // it: their fixtures are all one-directional. This is the two-way case, on real grid
+    // geometry, with the real lane offset.
+    const { grid } = crossGrid();
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+
+    const streams = [
+      { car: makeCar(), path: rowPath(0, 11, 5), start: 0 },
+      { car: makeCar(), path: rowPath(11, 0, 5), start: 60 },
+      { car: makeCar(), path: columnPath(0, 11, 5), start: 120 },
+      { car: makeCar(), path: columnPath(11, 0, 5), start: 180 },
+    ];
+    // Staggered starts, so the four do not meet the junction in lockstep symmetry.
+    for (const s of streams) placeAt(adapter, s.car, s.path, s.start);
+
+    const arrivals = new Map(streams.map(s => [s.car.id, 0]));
+    let blockedEvents = 0;
+
+    for (let i = 0; i < 60 * 90; i++) {
+      for (const event of adapter.update(DT)) {
+        if (event.kind === TrafficEventKind.Blocked) blockedEvents++;
+        if (event.kind !== TrafficEventKind.Arrived) continue;
+        const stream = streams.find(s => s.car.id === event.vehicleId);
+        if (!stream) continue;
+        arrivals.set(stream.car.id, arrivals.get(stream.car.id)! + 1);
+        // Send it round again: remove and reinstall from the start of the same path.
+        adapter.removeVehicle(stream.car);
+        placeAt(adapter, stream.car, stream.path, 0);
+      }
+    }
+
+    // Ninety seconds, four streams, one contested box: the watchdog stayed silent and
+    // every direction kept completing laps. An 11-tile lap is ~11s of driving, so five
+    // laps a stream leaves room for plenty of queueing without tolerating a freeze.
+    expect(blockedEvents, 'stall watchdog reports').toBe(0);
+    for (const s of streams) {
+      expect(arrivals.get(s.car.id), `laps completed by the ${s.start}px stream`)
+        .toBeGreaterThanOrEqual(5);
+    }
+  });
 });
 
 describe('TrafficAdapter arrival and despawn', () => {
