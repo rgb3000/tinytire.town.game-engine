@@ -53,6 +53,32 @@ export const MAX_DECELERATION = TILE_SIZE * 4;
  */
 export const STOP_LINE_SETBACK = CAR_LENGTH / 2;
 
+/**
+ * How close to its route's end a vehicle must get to count as arrived, px.
+ *
+ * The end of a route is the destination cell's centre — the house, the business connector,
+ * the gas station — and the model parks exactly `s0` short of it, so "arrived" must fire
+ * *before* the rest position or no vehicle would ever arrive. Derived from `s0` rather than
+ * restated so that inequality is structural: retune `s0` and the threshold follows.
+ *
+ * The margin above `s0` trades a visual against a wait, measured on a full-speed approach
+ * to a route end (`s0` = 4):
+ *
+ * - At the old half-tile threshold the event fired with the car a full 20px short of the
+ *   destination — the game then parks or despawns it there, which read as the car jumping
+ *   from the road into the building instead of driving in.
+ * - `s0 + 4` fires at 8px out, where the nose (half of `CAR_LENGTH`) is 2px short of the
+ *   destination centre and the approach still moves at ~9px/s — the car visibly pulls in,
+ *   0.80s after it would have crossed the old line.
+ * - `s0 + 2` looks 2px better and costs 0.37s more, spent creeping below 6px/s; the tail
+ *   is asymptotic, so every pixel closer to `s0` costs disproportionately more wait.
+ *
+ * It also bounds queue safety at shared destinations: a follower behind a leader parked at
+ * the end rests `CAR_LENGTH + 2*s0` = 20px short, comfortably outside the 8px band, so a
+ * queued car cannot be declared arrived at a destination it has not reached.
+ */
+export const ARRIVAL_SLACK = DEFAULT_IDM.s0 + 4;
+
 /** How many route edges ahead the leader search scans. Beyond this, gaps are irrelevant. */
 export const LEADER_SCAN_EDGES = 3;
 

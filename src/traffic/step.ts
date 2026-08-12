@@ -1,4 +1,4 @@
-import { CAR_DEBUG, TILE_SIZE } from '../constants';
+import { CAR_DEBUG } from '../constants';
 import { getDirection } from '../utils/direction';
 import { idmAcceleration } from './headway';
 import { LaneIndex, edgeIndexAt, laneKeyForEdge } from './lanes';
@@ -6,7 +6,7 @@ import { admit } from './junction';
 import type { JunctionCandidate } from './junction';
 import { nearestConstraint, junctionKey } from './obstacles';
 import { segmentAt, speedLimitAt } from './route';
-import { DEFAULT_IDM, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
+import { ARRIVAL_SLACK, DEFAULT_IDM, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
 import { SegmentKind, TrafficEventKind, VehicleMode } from './types';
 import type { Route, TrafficEvent, TrafficWorld, Vehicle } from './types';
 
@@ -199,24 +199,15 @@ function buildJunctionCandidates(world: TrafficWorld): {
 }
 
 /**
- * How close to the end of its route a vehicle must get to count as arrived: half a tile,
- * which is the destination cell's own near boundary.
+ * The arrival threshold lives in `tuning.ts` (`ARRIVAL_SLACK`), derived from `s0` so that
+ * it always stays wider than the distance the model parks short of the destination — the
+ * inequality this stepper depends on to declare arrival at all. `parks closer to the route
+ * end than the arrival threshold` in `step.test.ts` pins it behaviourally.
  *
- * It cannot be the route's end arc. `nearestConstraint` makes the destination a stop line
- * at `route.length`, so the headway model parks the vehicle `s0` short of it and it never
- * reaches the end at all — measured, a 3-tile route ends with the car resting 13.72px
- * short of 120. Testing for `arcDistance >= route.length` would mean no vehicle in the game
- * ever arrives. Half a tile is the arc at which the vehicle enters the destination cell,
- * which is what "arrived" means to the adapter, and it is derived from the grid rather than
- * from an IDM tuning value that a later pass may move.
- *
- * It does still carry one dependency on tuning, in the other direction: it must stay **wider
- * than the distance the model parks short of the destination**, which is `s0`. Raise `s0`
- * past half a tile and no vehicle would ever arrive again — the exact failure this constant
- * exists to fix. `parks closer to the route end than the arrival threshold` in
- * `step.test.ts` pins that, behaviourally rather than by restating the inequality.
+ * The `route.length / 2` floor below keeps the arrival arc strictly inside the route and
+ * in its far half, however short the route is; a highway span carries an arbitrary
+ * polyline, so a route may be shorter than any fixed threshold.
  */
-const ARRIVAL_SLACK = TILE_SIZE / 2;
 
 interface Scratch {
   laneIndex: LaneIndex;

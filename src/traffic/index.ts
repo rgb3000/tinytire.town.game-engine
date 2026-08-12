@@ -12,8 +12,8 @@ export { step } from './step';
 // braking model, and the stall watchdog needs the same standstill threshold the junction's
 // exit-clearance rule uses. Exported rather than duplicated so the two cannot drift.
 export {
-  DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
-  STOP_LINE_SETBACK,
+  ARRIVAL_SLACK, DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS,
+  STOPPED_SPEED, STOP_LINE_SETBACK,
 } from './tuning';
 export { createWorld, SegmentKind, VehicleMode, TrafficEventKind } from './types';
 export type {

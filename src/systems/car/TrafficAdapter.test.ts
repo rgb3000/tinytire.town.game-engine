@@ -9,7 +9,7 @@ import { RoadSystem } from '../RoadSystem';
 import { HighwaySystem } from '../HighwaySystem';
 import { defaultControlPoints } from '../../highways/highwayGeometry';
 import { Pathfinder } from '../../pathfinding/Pathfinder';
-import { sampleRoute, SegmentKind, STALL_WATCHDOG_SECONDS, STOP_LINE_SETBACK, TrafficEventKind } from '../../traffic';
+import { ARRIVAL_SLACK, sampleRoute, SegmentKind, STALL_WATCHDOG_SECONDS, STOP_LINE_SETBACK, TrafficEventKind } from '../../traffic';
 import type { Route } from '../../traffic';
 import type { GridPos } from '../../types';
 
@@ -860,8 +860,8 @@ describe('TrafficAdapter arrival and despawn', () => {
     const route = adapter.getRouteFor(follower)!;
     expect(followerArrived).toBe(-1);
     // Parked one car length plus one standstill gap behind the arrived leader, and so short
-    // of the half-tile band in which arrival is declared, for the remaining 22 seconds.
-    expect(adapter.getArc(follower)).toBeLessThan(route.length - TILE / 2);
+    // of the band in which arrival is declared, for the remaining 22 seconds.
+    expect(adapter.getArc(follower)).toBeLessThan(route.length - ARRIVAL_SLACK);
     expect(adapter.getArc(follower)).toBeGreaterThan(route.length - 2 * TILE);
     expect(adapter.getSpeed(follower)).toBeLessThan(1e-6);
   });
@@ -1757,19 +1757,19 @@ describe('TrafficAdapter reroute anchoring', () => {
     expect(moved).toBeLessThan(1);
   });
 
-  it('still reports an arrival for a car rerouted into the last half-tile of its route', () => {
+  it('still reports an arrival for a car rerouted past the arrival threshold of its route', () => {
     // `Arrived` used to be a rising edge on `arcDistance`, and `installRoute` writes the arc
     // rather than driving over it — so a car whose first arc on its new route was already past
     // the threshold had no edge to offer and could never arrive. It is one tile from home that
-    // makes this reachable: the route is two cells, the arrival arc is half a tile, and a car
-    // more than half a tile along it starts past its own destination test. Nothing would then
-    // despawn or park it, so it would block the road for the rest of the session with the
-    // watchdog reporting it every twelve seconds for ever.
+    // makes this reachable: the route is two cells and a car deep enough along it starts past
+    // its own destination test. Nothing would then despawn or park it, so it would block the
+    // road for the rest of the session with the watchdog reporting it every twelve seconds
+    // for ever.
     const grid = new Grid(20, 5);
     roadRow(grid, 8);
     const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
     const car = makeCar();
-    placeAt(adapter, car, gridPath(8), 5.75 * TILE);
+    placeAt(adapter, car, gridPath(8), 5.9 * TILE);
 
     const from = adapter.getCurrentCell(car)!;
     expect(from).toEqual({ gx: 5, gy: 0 });
@@ -1780,7 +1780,7 @@ describe('TrafficAdapter reroute anchoring', () => {
     // Premise: the car is placed past the arrival arc of its new route, which is the only
     // regime where a latch and an edge differ.
     expect(route.length).toBeCloseTo(TILE, 3);
-    expect(adapter.getArc(car)).toBeGreaterThan(route.length - TILE / 2);
+    expect(adapter.getArc(car)).toBeGreaterThan(route.length - Math.min(ARRIVAL_SLACK, route.length / 2));
 
     const events = adapter.update(DT);
     expect(events.filter(e => e.kind === TrafficEventKind.Arrived).map(e => e.vehicleId)).toEqual([car.id]);
