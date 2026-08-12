@@ -1,4 +1,4 @@
-import { TILE_SIZE } from '../constants';
+import { CAR_LENGTH, TILE_SIZE } from '../constants';
 import type { IdmParams } from './headway';
 
 /**
@@ -22,6 +22,34 @@ export const DEFAULT_IDM: IdmParams = {
 
 /** Hard ceiling on braking, used to clamp the integrator. Emergency, not comfort. */
 export const MAX_DECELERATION = TILE_SIZE * 4;
+
+/**
+ * How far behind the junction boundary a waiting car's *centre* comes to rest, px.
+ *
+ * A stop line is a line, not a car: parking `s0` behind it — the right thing behind a
+ * physical leader — left a waiting car's nose 8px outside the boundary and a full 20px of
+ * empty asphalt short of the crossing pavement (`ROAD_HALF_WIDTH` is 8px from the junction
+ * centre), which reads as a car refusing to pull up. `nearestConstraint` therefore places
+ * the stop constraint `s0 - STOP_LINE_SETBACK` *past* the boundary, so the IDM equilibrium
+ * rest — constraint minus `s0` — lands here, independent of any later retune of `s0`.
+ *
+ * Bracketed on both sides:
+ *
+ * - **Lower bound 5px** — the forced-stop distance from full road speed,
+ *   `CAR_SPEED² / (2 · MAX_DECELERATION)` = 40²/320. A car can lose admission on the tick a
+ *   competitor with a better claim stamps in; below this margin it crosses the boundary
+ *   while stopping, flips `inside`, and is granted the absolute priority it was just
+ *   denied. (A map raising `CAR_SPEED` past ~1.1 tiles/s erodes the margin — at 6px the
+ *   breach speed is 44px/s — but the old `s0` margin of 14px was itself breached at
+ *   67px/s, so the hazard is older than this constant. The integrator's own settle error
+ *   is 0.281px, an order of magnitude inside the margin.)
+ * - **Upper bound `s0` (14px)** — at which the constant cancels and the car parks a
+ *   car-length of daylight before the line, the very complaint this exists to fix.
+ *
+ * `CAR_LENGTH / 2` = 6px rests the nose exactly on the boundary: visually at the line,
+ * still a pixel of margin over the worst forced stop.
+ */
+export const STOP_LINE_SETBACK = CAR_LENGTH / 2;
 
 /** How many route edges ahead the leader search scans. Beyond this, gaps are irrelevant. */
 export const LEADER_SCAN_EDGES = 3;

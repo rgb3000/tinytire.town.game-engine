@@ -2,6 +2,7 @@ import { SegmentKind } from './types';
 import type { Route, TrafficWorld, Vehicle } from './types';
 import type { LaneIndex } from './lanes';
 import { segmentAt } from './route';
+import { DEFAULT_IDM, STOP_LINE_SETBACK } from './tuning';
 
 export interface Constraint {
   /** Arc distance on the vehicle's own route that it must not pass. */
@@ -103,12 +104,19 @@ export function nearestConstraint(
 
   // A junction the vehicle has not been admitted to becomes a stop line at its boundary.
   // Admission to some *other* junction is not admission to this one.
+  //
+  // The constraint arc sits `s0 - STOP_LINE_SETBACK` *past* the boundary, so the IDM rest
+  // position — constraint minus `s0` — lands `STOP_LINE_SETBACK` short of it. A stop line
+  // is a line, not a car's rear bumper: parking the full `s0` behind it left a car-length
+  // of daylight before the crossing. The rest stays outside the boundary, so an unadmitted
+  // car never flips `inside`; the margin is sized in `tuning.ts` against the worst forced
+  // stop, which is what bounds how late an admission can be revoked.
   const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
   if (cellIndex >= 0) {
     const cell = route.cells[cellIndex];
     const admittedHere = admitted.get(junctionKey(cell.gx, cell.gy))?.has(vehicle.id) === true;
     if (!admittedHere) {
-      const stopArc = junctionEntryArc(route, cellIndex);
+      const stopArc = junctionEntryArc(route, cellIndex) + (DEFAULT_IDM.s0 - STOP_LINE_SETBACK);
       if (stopArc < best.arc) best = { arc: stopArc, speed: 0 };
     }
   }

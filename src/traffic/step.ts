@@ -23,8 +23,11 @@ import type { Route, TrafficEvent, TrafficWorld, Vehicle } from './types';
  * physically in it — and an inside vehicle missing for even one tick is exactly what lets
  * a conflicting stream be admitted on top of it.
  *
- * The midpoint form is also the one `junctionEntryArc` uses for the stop line, so the arc
- * at which a car becomes `inside` is precisely the arc it was told to stop at.
+ * The midpoint form is also the one `junctionEntryArc` uses, so the boundary at which a
+ * car becomes `inside` is the boundary its stop line is derived from. The stop constraint
+ * itself sits `s0 - STOP_LINE_SETBACK` past it — placed so the IDM rest lands
+ * `STOP_LINE_SETBACK` *short* of the boundary — which keeps an unadmitted car outside;
+ * `tuning.ts` sizes that margin against the worst forced stop.
  */
 function cellStartArc(route: Route, i: number): number {
   return i > 0 ? (route.cellDist[i - 1] + route.cellDist[i]) / 2 : route.cellDist[i];

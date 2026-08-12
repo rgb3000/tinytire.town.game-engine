@@ -23,7 +23,7 @@ import { describe, it, expect } from 'vitest';
 import { buildRoute, segmentAt, speedLimitAt } from './route';
 import { LaneIndex, laneKey } from './lanes';
 import { idmAcceleration } from './headway';
-import { DEFAULT_IDM } from './tuning';
+import { DEFAULT_IDM, STOP_LINE_SETBACK } from './tuning';
 import { junctionEntryArc, isInsideJunction, junctionKey, nearestConstraint } from './obstacles';
 import { SegmentKind, VehicleMode, createWorld } from './types';
 import { Direction } from '../types';
@@ -46,6 +46,13 @@ const OLD_CAR_MIN_GAP = TILE_SIZE * 0.4;
 const OLD_CAR_COMFORT_GAP = TILE_SIZE * 1.5;
 const OLD_INTERSECTION_STOP_DIST = TILE_SIZE * 0.3;
 const OLD_INTERSECTION_DECEL_DIST = TILE_SIZE * 2.0;
+
+/**
+ * The stop constraint sits this far past the junction boundary, so that the IDM rest —
+ * constraint minus `s0` — lands `STOP_LINE_SETBACK` short of the boundary. A stop line is
+ * a line, not a rear bumper; see the note in `tuning.ts`.
+ */
+const STOP_PAST = DEFAULT_IDM.s0 - STOP_LINE_SETBACK;
 
 const R = SegmentKind.Road;
 const X = SegmentKind.Intersection;
@@ -255,14 +262,19 @@ describe('nearestConstraint', () => {
     expect(c.speed).toBeCloseTo(5, 5);
   });
 
-  it('stops at the junction boundary when not admitted', () => {
+  it('rests an unadmitted car just short of the junction boundary', () => {
     const w = world(road('r1', [R, R, X, R]), vehicle('a', 0));
     const route = w.routes.get('r1')!;
     const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
     expect(route.length).toBeGreaterThan(boundary);
 
     const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Map());
-    expect(c.arc).toBeCloseTo(boundary, 5);
+    expect(c.arc).toBeCloseTo(boundary + STOP_PAST, 5);
+    // The arc is a means; the rest position is the point. IDM parks `s0` behind a
+    // constraint, so the car comes to rest `STOP_LINE_SETBACK` outside the boundary —
+    // at the line, and still out of the box.
+    expect(c.arc - DEFAULT_IDM.s0).toBeCloseTo(boundary - STOP_LINE_SETBACK, 5);
+    expect(c.arc - DEFAULT_IDM.s0).toBeLessThan(boundary);
     expect(c.speed).toBe(0);
   });
 
@@ -300,7 +312,7 @@ describe('nearestConstraint', () => {
     expect(secondBoundary).toBeGreaterThan(TILE_SIZE);
 
     const inFirst = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, [1], 'a'));
-    expect(inFirst.arc).toBeCloseTo(secondBoundary, 5);
+    expect(inFirst.arc).toBeCloseTo(secondBoundary + STOP_PAST, 5);
     expect(inFirst.speed).toBe(0);
 
     // Admitted to the second as well, it may cross. Same geometry, so the difference is
@@ -373,7 +385,7 @@ describe('nearestConstraint', () => {
    */
   it('keeps the junction when it is nearer than the car ahead', () => {
     const start = TILE_SIZE / 2;
-    const gap = TILE_SIZE * 1.125;
+    const gap = TILE_SIZE * 1.35;
     const w = world(
       road('r1', [R, R, X, R]),
       vehicle('a', start, 20),
@@ -382,9 +394,9 @@ describe('nearestConstraint', () => {
     const route = w.routes.get('r1')!;
     const index = indexed(w);
     const boundary = 2 * TILE_SIZE - TILE_SIZE / 2;
-    // Premise: the leader's rear bumper is beyond the stop line — it is in the box — and
-    // the stop line is still ahead of the follower.
-    expect(start + gap).toBeGreaterThan(boundary);
+    // Premise: the leader's rear bumper is beyond the stop constraint — it is in the box —
+    // and the constraint is still ahead of the follower.
+    expect(start + gap).toBeGreaterThan(boundary + STOP_PAST);
     expect(boundary).toBeGreaterThan(start);
     expect(isInsideJunction(route, w.vehicles[1].arcDistance)).toBe(true);
     // Premise: the leader is a live candidate, not an absent one. Without this the test
@@ -394,7 +406,7 @@ describe('nearestConstraint', () => {
     expect(leader!.gap).toBeCloseTo(gap, 5);
 
     const c = nearestConstraint(w, w.vehicles[0], index, new Map());
-    expect(c.arc).toBeCloseTo(boundary, 5);
+    expect(c.arc).toBeCloseTo(boundary + STOP_PAST, 5);
     expect(c.speed).toBe(0);
 
     // Admit it through, and the same geometry hands back that leader — so the junction won
@@ -423,7 +435,7 @@ describe('nearestConstraint', () => {
     expect(segmentAt(route, route.cellDist[3])!.kind).toBe(SegmentKind.Intersection);
 
     const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Map());
-    expect(c.arc).toBeCloseTo(TILE_SIZE - TILE_SIZE / 2, 5);
+    expect(c.arc).toBeCloseTo(TILE_SIZE - TILE_SIZE / 2 + STOP_PAST, 5);
   });
 
   it('finds the junction by arc, not by cell index, across a highway', () => {
@@ -446,7 +458,7 @@ describe('nearestConstraint', () => {
     expect(wrongBoundary).toBeGreaterThan(boundary);
 
     const c = nearestConstraint(w, w.vehicles[0], indexed(w), new Map());
-    expect(c.arc).toBeCloseTo(boundary, 5);
+    expect(c.arc).toBeCloseTo(boundary + STOP_PAST, 5);
   });
 
   it('holds a vehicle in place when its route is gone', () => {
@@ -510,11 +522,13 @@ describe('nearestConstraint', () => {
 
   /**
    * The old intersection ramp measured to the junction *centre* and reached zero
-   * `OLD_INTERSECTION_STOP_DIST` short of it — a stop line inside the cell. This module's stop
-   * line is the cell boundary, so a car that has crossed it is already committed and must
-   * be carried by admission rather than braked.
+   * `OLD_INTERSECTION_STOP_DIST` short of it — a stop line inside the cell, where cars came
+   * to rest in the box. This module rests an unadmitted car `STOP_LINE_SETBACK` *outside*
+   * the boundary, and a car past the boundary is inside the junction, which the stepper
+   * always offers and admits (`JunctionCandidate.inside`) — committed cars are carried by
+   * admission, never braked mid-box.
    */
-  it('stops at the junction boundary where the old ramp stopped inside the box', () => {
+  it('carries a car the old ramp would have stopped inside the box', () => {
     // Premise: the old ramp's zero point really did lie within the junction cell.
     expect(OLD_INTERSECTION_STOP_DIST).toBeLessThan(TILE_SIZE / 2);
 
@@ -528,18 +542,19 @@ describe('nearestConstraint', () => {
     expect(centre - between).toBeLessThan(OLD_INTERSECTION_DECEL_DIST);
 
     const w = world(road('r1', [R, R, X, R]), vehicle('a', between, 20));
+    const route = w.routes.get('r1')!;
     const index = indexed(w);
-    const notAdmitted = new Map<number, Set<string>>();
 
-    // The old rule still lets this car drive: it is past the boundary but short of the
-    // centre, so its multiplier has not reached zero.
-    expect(minOfTwoMultipliers(w, w.vehicles[0], index, notAdmitted)).toBeGreaterThan(0);
+    // The old rule brakes this car toward a rest inside the box: it is past the boundary
+    // and short of the centre, so its multiplier is engaged but has not reached zero.
+    expect(minOfTwoMultipliers(w, w.vehicles[0], index, new Map())).toBeGreaterThan(0);
 
-    // This module put the stop line at the boundary, which the car is already past.
-    const c = nearestConstraint(w, w.vehicles[0], index, notAdmitted);
-    expect(c.arc).toBeCloseTo(boundary, 5);
-    expect(c.arc).toBeLessThan(between);
-    expect(c.speed).toBe(0);
+    // This module: the car is inside the junction, so it is admitted, and admission
+    // dissolves the stop line entirely — the only constraint left is the route's end.
+    expect(between).toBeGreaterThan(boundary);
+    const c = nearestConstraint(w, w.vehicles[0], index, admittedTo(route, [2], 'a'));
+    expect(c.arc).toBeCloseTo(route.length, 5);
+    expect(c.arc).toBeGreaterThan(oldStopLine);
   });
 });
 

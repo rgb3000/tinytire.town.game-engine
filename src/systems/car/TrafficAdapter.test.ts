@@ -9,7 +9,7 @@ import { RoadSystem } from '../RoadSystem';
 import { HighwaySystem } from '../HighwaySystem';
 import { defaultControlPoints } from '../../highways/highwayGeometry';
 import { Pathfinder } from '../../pathfinding/Pathfinder';
-import { sampleRoute, SegmentKind, STALL_WATCHDOG_SECONDS, TrafficEventKind } from '../../traffic';
+import { sampleRoute, SegmentKind, STALL_WATCHDOG_SECONDS, STOP_LINE_SETBACK, TrafficEventKind } from '../../traffic';
 import type { Route } from '../../traffic';
 import type { GridPos } from '../../types';
 
@@ -658,7 +658,7 @@ describe('TrafficAdapter junction admission', () => {
     const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
     const across = rowPath(0, 11, 5);
     const waiter = makeCar();
-    placeAt(adapter, waiter, columnPath(0, 11, 5), 180 - S0);
+    placeAt(adapter, waiter, columnPath(0, 11, 5), 180 - STOP_LINE_SETBACK + 2);
 
     const crossing: Car[] = [];
     let arrivedAt = -1;
@@ -869,7 +869,7 @@ describe('TrafficAdapter stall watchdog', () => {
     const path = rowPath(0, 11, 5);
     const queued = makeCar();
     const abandoned = makeCar();
-    placeAt(adapter, queued, path, 170);
+    placeAt(adapter, queued, path, 180 - STOP_LINE_SETBACK + 2);
     placeAt(adapter, abandoned, path, 240);
     adapter.setParked(abandoned, true);
 
@@ -1171,7 +1171,7 @@ describe('TrafficAdapter watchdog reset', () => {
     const path = rowPath(0, 11, 5);
     const queued = makeCar();
     const abandoned = makeCar();
-    placeAt(adapter, queued, path, 170);
+    placeAt(adapter, queued, path, 180 - STOP_LINE_SETBACK + 2);
     placeAt(adapter, abandoned, path, 240);
     adapter.setParked(abandoned, true);
 
@@ -1300,7 +1300,7 @@ describe('TrafficAdapter watchdog threshold', () => {
     const path = rowPath(0, 11, 5);
     const queued = makeCar();
     const obstruction = makeCar();
-    placeAt(adapter, queued, path, 170);
+    placeAt(adapter, queued, path, 180 - STOP_LINE_SETBACK + 2);
     placeAt(adapter, obstruction, path, 240);
     adapter.setParked(obstruction, true);
 

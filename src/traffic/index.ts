@@ -13,6 +13,7 @@ export { step } from './step';
 // exit-clearance rule uses. Exported rather than duplicated so the two cannot drift.
 export {
   DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
+  STOP_LINE_SETBACK,
 } from './tuning';
 export { createWorld, SegmentKind, VehicleMode, TrafficEventKind } from './types';
 export type {
