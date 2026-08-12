@@ -326,6 +326,17 @@ export class Game {
     return this.carSystem.inspect(car);
   }
 
+  /**
+   * The whole traffic simulation as data, for debugging a board that has locked up:
+   * a snapshot that replays in a Node test, a per-car explanation of every standstill
+   * (with any waits-for cycle named), and the same diagnosis as printable text.
+   *
+   * Diagnostic, not gameplay. The demo binds it to `window.dumpTraffic()`.
+   */
+  dumpTraffic(): ReturnType<CarSystem['dumpTraffic']> {
+    return this.carSystem.dumpTraffic();
+  }
+
   getCarEventLog(): typeof CarEventLog {
     return CarEventLog;
   }

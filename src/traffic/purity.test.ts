@@ -219,6 +219,7 @@ describe('src/traffic purity', () => {
     const sources = trafficSources().map(rel);
     // The module's own files. Named rather than counted, so deleting one is visible.
     expect(sources).toEqual([
+      'src/traffic/diagnose.ts',
       'src/traffic/headway.ts',
       'src/traffic/index.ts',
       'src/traffic/junction.ts',
@@ -226,6 +227,7 @@ describe('src/traffic purity', () => {
       'src/traffic/obstacles.ts',
       'src/traffic/route.ts',
       'src/traffic/routeQueries.ts',
+      'src/traffic/snapshot.ts',
       'src/traffic/step.ts',
       'src/traffic/tuning.ts',
       'src/traffic/types.ts',

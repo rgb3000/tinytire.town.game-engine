@@ -1,5 +1,6 @@
 import { Game, MapDesigner, allMaps, type MapConfig } from '../src/index';
 import { mountPlayPanel } from './playPanel';
+import { wireTrafficDebug } from './trafficDebug';
 import { mountDesignPanel } from './designPanel';
 import { el, pill, setPressed } from './ui';
 
@@ -77,11 +78,13 @@ function mount(): void {
     const map = selectedMap();
     const game = new Game(canvas, map);
     game.start();
+    const unwireDebug = wireTrafficDebug(game);
     const unmountPanel = mountPlayPanel(game, map, {
       onRestart: mount,
       onChangeMap: () => picker.focus(),
     });
     teardown = () => {
+      unwireDebug();
       unmountPanel();
       game.dispose();
     };

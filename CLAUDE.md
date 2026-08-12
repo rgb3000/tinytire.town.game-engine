@@ -145,10 +145,26 @@ Three properties are worth knowing, because none is visible from any one file:
     re-checking, so a hand-edited map file could carry one.
 
   Do not assume the coverage is total when deciding whether some new path needs regulating.
-- **Junction admission is greedy over a total order**, which is why it cannot deadlock and
-  needs no escape timeout. *Rechts vor links* shapes the order but cannot cycle it. The old
-  model's `INTERSECTION_DEADLOCK_TIMEOUT` and `UNIVERSAL_STUCK_TIMEOUT` existed to break
-  cycles that this construction cannot produce, and were deleted with it.
+- **Junction admission is greedy over a total order, per junction *region*** — a region
+  being a maximal set of 8-adjacent intersection cells (`junctionComponents`), admitted as
+  one unit. Within a region the greedy order cannot deadlock and needs no escape timeout;
+  *rechts vor links* shapes the order but cannot cycle it. The old model's
+  `INTERSECTION_DEADLOCK_TIMEOUT` and `UNIVERSAL_STUCK_TIMEOUT` existed to break cycles
+  that this construction cannot produce, and were deleted with it.
+
+  Regions, not cells, because the per-junction guarantee says nothing *across* junctions,
+  and adjacent junction cells couple geometrically: a stop line rests a car
+  `STOP_LINE_SETBACK` before the boundary — inside the *previous* cell — so with two
+  adjacent junction cells, each one's stop line lies inside the other's box. The first
+  deadlock the demo's freeze watchdog ever captured was exactly that: two opposing cars,
+  each regularly admitted through its first cell, each at rest at the second one's line
+  inside the box the other needed, each holding it with the absolute priority `inside`
+  demands — and no reroute could help, because the block was the cars' physical positions.
+  Region admission removes the state: a car enters only when it can traverse the whole
+  region, so every rest position is on plain ground — the cell before a region's entry
+  cannot itself be a junction cell, or it would be *in* the region. Reproduced and pinned
+  in `adjacentJunctions.test.ts`; candidates carry one maneuver per cell
+  (`CellManeuver[]`), and conflict is any shared cell with conflicting chords.
 
   The guarantee covers only what the order decides, and `exitHasRoom` runs *before* the
   order — a candidate with no exit room is skipped unconditionally — so a mistake there
@@ -157,12 +173,16 @@ Three properties are worth knowing, because none is visible from any one file:
   inside the oncoming car's exit cell. Two cars stopped at one junction from opposite
   sides therefore denied each other forever — maneuvers that do not even conflict — and
   one transient yield on any two-way road set it up, which is how whole boards froze with
-  a handful of cars. Room is now asked of the directed exit **lane** (`laneKeyForEdge`,
-  the leader search's own definition). The pure-model sweeps could not see this because
-  every fixture was one-directional, and they cannot honestly host a two-way one — pure
-  routes run through cell centres, so opposing cars overlap in world space by
-  construction. The two-way case is pinned at the adapter instead, on real lane geometry
-  (`keeps four two-way streams flowing` in `TrafficAdapter.test.ts`).
+  a handful of cars. Room is now asked of the directed exit **lanes** (`laneKeyForEdge`,
+  the leader search's own definition), and asked by **measurement**: the nearest stopped
+  vehicle on the two edges leaving the region must leave space for a full car to rest with
+  its rear past the boundary (`EXIT_REST_MARGIN` absorbs the measurement's known errors).
+  The binary form of that test held queues a whole junction back of a blockage while a
+  tile of packable road stood empty, and scanned only the farther of the two exit edges,
+  which made a car stopped just past the boundary invisible and admitted entrants into a
+  rest position tail-in-the-box; both are pinned in `step.test.ts`. The two-way case is
+  pinned at the adapter, on real lane geometry (`keeps four two-way streams flowing` in
+  `TrafficAdapter.test.ts`).
 - **Deceleration is computed once, at one site.** Every reason to slow down — a leader, a
   junction stop line, a route end — is collapsed into a single virtual leader and fed to IDM
   (`headway.ts`). Two independently-tuned ramps combined with `Math.min` was the old model
@@ -171,6 +191,18 @@ Three properties are worth knowing, because none is visible from any one file:
 `STALL_WATCHDOG_SECONDS` (`tuning.ts`) is *not* a deadlock escape: it is a report. After 12s
 of unchosen standstill the adapter emits `Blocked` and the game decides whether to reroute or
 strand — the remedy is game-side, so the threshold lives at the seam, not in the model.
+
+**Debugging a frozen board.** `diagnose.ts` explains every standstill in the stepper's own
+terms — it replays the tick's `junctionDecisions` and reads `nearestConstraint`'s identity
+fields, so the reason reported ("behind car-3", "junction (4,2) no-exit-room by [car-7]") is
+the decision the stepper acted on; it names any waits-for cycle outright, which is a
+deadlock by construction, and lists any vehicle pair closer than a car length in world
+space, which is how a visual overlap report becomes attributable. `snapshot.ts` serializes the whole world to JSON and restores it
+tick-for-tick identical. The demo wires both (`demo/trafficDebug.ts`): a freeze auto-captures
+once after 5s and `window.dumpTraffic()` captures on demand, stashing the snapshot on
+`window.__lastTrafficDump`. The workflow for any future deadlock: copy that JSON, save it as
+a fixture, load it with `deserializeWorld` in a test, and `step`/`diagnoseWorld` the exact
+frozen state under Node. `Game.dumpTraffic()` is the public tap.
 
 Nothing here imports Three.js or `Grid`, enforced by `src/traffic/purity.test.ts`, so the
 whole model is exercised directly by the Node-only suite.

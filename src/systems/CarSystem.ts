@@ -148,6 +148,15 @@ export class CarSystem {
   }
 
   /**
+   * The full state of the traffic simulation, for debugging a frozen board. See
+   * {@link TrafficAdapter.dump}; delegation only, so `Game` can reach it without the
+   * adapter itself becoming public surface.
+   */
+  dumpTraffic(): ReturnType<TrafficAdapter['dump']> {
+    return this.adapter.dump();
+  }
+
+  /**
    * The cars that would be harmed if the road cell `(gx, gy)` vanished right now.
    *
    * `Game.handleTryErase` removes the cell outright when this is empty and marks it pending

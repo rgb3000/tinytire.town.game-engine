@@ -10,9 +10,11 @@ import { INTERSECTION_SPEED_MULTIPLIER, TILE_SIZE } from '../../constants';
 import { gridToPixelCenter, pixelToGrid } from '../../utils/math';
 import {
   buildRoute, sampleRoute, step, createWorld, routeCoversCell, cellsBetween,
+  diagnoseWorld, formatDiagnosis, serializeWorld,
   SegmentKind, VehicleMode, TrafficEventKind,
   DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
 } from '../../traffic';
+import type { WorldDiagnosis, WorldSnapshot } from '../../traffic';
 import type {
   Route, RouteCellInput, RouteSpan, TrafficEvent, TrafficWorld, Vehicle,
 } from '../../traffic';
@@ -455,6 +457,31 @@ export class TrafficAdapter {
    */
   getStalledSeconds(car: Car): number {
     return this.stalledFor.get(car.id) ?? 0;
+  }
+
+  /**
+   * Everything needed to take a frozen board apart, in one object.
+   *
+   * `snapshot` restores in a Node test via `deserializeWorld` and steps identically to the
+   * live world it was copied from; `diagnosis` explains every standstill in the stepper's
+   * own terms, including any waits-for cycle; `text` is the same diagnosis formatted for a
+   * console. `stalledSeconds` is adapter state — how long each car has stood without
+   * choosing to — which the pure world does not carry, so it rides along here. Vehicle ids
+   * are car ids, so every name in the diagnosis is a car on the board.
+   */
+  dump(): {
+    snapshot: WorldSnapshot;
+    diagnosis: WorldDiagnosis;
+    text: string;
+    stalledSeconds: Record<string, number>;
+  } {
+    const diagnosis = diagnoseWorld(this.world);
+    return {
+      snapshot: serializeWorld(this.world),
+      diagnosis,
+      text: formatDiagnosis(diagnosis),
+      stalledSeconds: Object.fromEntries(this.stalledFor),
+    };
   }
 
   /**
