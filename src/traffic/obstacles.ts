@@ -4,11 +4,32 @@ import type { LaneIndex } from './lanes';
 import { segmentAt } from './route';
 import { DEFAULT_IDM, STOP_LINE_SETBACK } from './tuning';
 
+/** What produced a constraint. Diagnostic identity; the stepper reads only arc and speed. */
+export const ConstraintKind = {
+  /** The end of the route: a car stops when it arrives. */
+  RouteEnd: 'route-end',
+  /** The rear bumper of the vehicle ahead in the same lane. */
+  Leader: 'leader',
+  /** The stop line of a junction this vehicle has not been admitted to. */
+  StopLine: 'stop-line',
+} as const;
+export type ConstraintKind = (typeof ConstraintKind)[keyof typeof ConstraintKind];
+
 export interface Constraint {
   /** Arc distance on the vehicle's own route that it must not pass. */
   arc: number;
   /** Speed of whatever is at that arc. Zero for stop lines and parked cars. */
   speed: number;
+  /**
+   * Which of the three sources won. Carried so that `diagnose.ts` can report *why* a car
+   * is held using the stepper's own decision rather than a reimplementation that could
+   * drift. Costs nothing: every path here already allocates a fresh object.
+   */
+  kind: ConstraintKind;
+  /** The vehicle ahead, when `kind` is `Leader`. */
+  leaderId?: string;
+  /** Index into `route.cells` of the junction, when `kind` is `StopLine`. */
+  cellIndex?: number;
 }
 
 /**
@@ -21,6 +42,69 @@ export interface Constraint {
  */
 export function junctionKey(gx: number, gy: number): number {
   return gx | (gy << 8);
+}
+
+/**
+ * Group every junction cell any route touches into its maximal region of 8-adjacent
+ * junction cells: `junctionKey` of a cell -> `junctionKey` of the region's representative
+ * (its smallest member key, so the id is independent of route insertion order).
+ *
+ * Regions rather than cells are what admission is keyed by, and the reason is geometric: a
+ * stop line rests a car `STOP_LINE_SETBACK` before the junction's entry boundary, which is
+ * inside the *previous* route cell. For a lone junction that cell is plain road; for two
+ * adjacent junction cells, each one's stop line is inside the other's box, so per-cell
+ * admission let two opposing cars come to rest each inside the box the other needed —
+ * `inside` holds are absolute and physical, and the pair froze permanently, with the whole
+ * board queueing behind it (`adjacentJunctions.test.ts`). Region admission restores the
+ * invariant the stop line's placement depends on: the cell before any region's entry is
+ * never itself a junction cell, because a junction cell adjacent to the entry would be *in*
+ * the region — so every rest position is on plain ground.
+ *
+ * Adjacency is over all eight directions, matching `Grid.recomputeIntersectionFlags`: a
+ * route may step diagonally, so a diagonal neighbour's stop line lands inside this cell's
+ * box exactly like a cardinal one's.
+ *
+ * Junction-ness is read per route by segment at the cell's arc — the same definition
+ * `nextJunctionCell` and the stepper use — so a cell one route crosses as a junction joins
+ * the region even if another route (or none) sees it as plain road at a span joint.
+ */
+export function junctionComponents(world: TrafficWorld): Map<number, number> {
+  const junctionCells = new Set<number>();
+  for (const route of world.routes.values()) {
+    for (let i = 0; i < route.cells.length; i++) {
+      const seg = segmentAt(route, route.cellDist[i]);
+      if (seg !== null && seg.kind === SegmentKind.Intersection) {
+        const c = route.cells[i];
+        junctionCells.add(junctionKey(c.gx, c.gy));
+      }
+    }
+  }
+
+  const component = new Map<number, number>();
+  for (const start of junctionCells) {
+    if (component.has(start)) continue;
+    const members: number[] = [];
+    const queue = [start];
+    component.set(start, start);
+    while (queue.length > 0) {
+      const key = queue.pop()!;
+      members.push(key);
+      const gx = key & 0xff;
+      const gy = key >> 8;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && dy === 0) continue;
+          const neighbour = junctionKey(gx + dx, gy + dy);
+          if (!junctionCells.has(neighbour) || component.has(neighbour)) continue;
+          component.set(neighbour, start);
+          queue.push(neighbour);
+        }
+      }
+    }
+    const representative = Math.min(...members);
+    for (const m of members) component.set(m, representative);
+  }
+  return component;
 }
 
 /**
@@ -87,19 +171,28 @@ export function nearestConstraint(
   vehicle: Vehicle,
   index: LaneIndex,
   admitted: Map<number, Set<string>>,
+  /**
+   * `junctionComponents` of this world, mapping each junction cell to the region key that
+   * `admitted` is keyed by. Omitted, every cell is its own region — the pre-region
+   * behaviour, kept as the default so unit fixtures with lone junctions need not build a
+   * component map. The stepper always passes the real one.
+   */
+  components?: Map<number, number>,
 ): Constraint {
   const route = world.routes.get(vehicle.routeId);
   // No route is no road: hold position rather than accelerate into nothing.
-  if (!route) return { arc: vehicle.arcDistance, speed: 0 };
+  if (!route) return { arc: vehicle.arcDistance, speed: 0, kind: ConstraintKind.RouteEnd };
 
   // The destination is always a constraint: a car stops when it arrives.
-  let best: Constraint = { arc: route.length, speed: 0 };
+  let best: Constraint = { arc: route.length, speed: 0, kind: ConstraintKind.RouteEnd };
 
   const leader = index.findLeader(world, vehicle);
   if (leader !== null) {
     // `gap` is already net of one car length, so this is the leader's rear bumper.
     const leaderArc = vehicle.arcDistance + leader.gap;
-    if (leaderArc < best.arc) best = { arc: leaderArc, speed: leader.speed };
+    if (leaderArc < best.arc) {
+      best = { arc: leaderArc, speed: leader.speed, kind: ConstraintKind.Leader, leaderId: leader.id };
+    }
   }
 
   // A junction the vehicle has not been admitted to becomes a stop line at its boundary.
@@ -114,10 +207,12 @@ export function nearestConstraint(
   const cellIndex = nextJunctionCell(route, vehicle.arcDistance);
   if (cellIndex >= 0) {
     const cell = route.cells[cellIndex];
-    const admittedHere = admitted.get(junctionKey(cell.gx, cell.gy))?.has(vehicle.id) === true;
+    const cellKey = junctionKey(cell.gx, cell.gy);
+    const regionKey = components?.get(cellKey) ?? cellKey;
+    const admittedHere = admitted.get(regionKey)?.has(vehicle.id) === true;
     if (!admittedHere) {
       const stopArc = junctionEntryArc(route, cellIndex) + (DEFAULT_IDM.s0 - STOP_LINE_SETBACK);
-      if (stopArc < best.arc) best = { arc: stopArc, speed: 0 };
+      if (stopArc < best.arc) best = { arc: stopArc, speed: 0, kind: ConstraintKind.StopLine, cellIndex };
     }
   }
 

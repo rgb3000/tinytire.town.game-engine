@@ -1,12 +1,12 @@
-import { CAR_DEBUG } from '../constants';
+import { CAR_DEBUG, CAR_LENGTH } from '../constants';
 import { getDirection } from '../utils/direction';
 import { idmAcceleration } from './headway';
 import { LaneIndex, edgeIndexAt, laneKeyForEdge } from './lanes';
 import { admit } from './junction';
-import type { JunctionCandidate } from './junction';
-import { nearestConstraint, junctionKey } from './obstacles';
+import type { CellManeuver, JunctionCandidate } from './junction';
+import { junctionComponents, junctionKey, nearestConstraint } from './obstacles';
 import { segmentAt, speedLimitAt } from './route';
-import { ARRIVAL_SLACK, DEFAULT_IDM, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
+import { ARRIVAL_SLACK, DEFAULT_IDM, EXIT_REST_MARGIN, MAX_DECELERATION, STOPPED_SPEED } from './tuning';
 import { SegmentKind, TrafficEventKind, VehicleMode } from './types';
 import type { Route, TrafficEvent, TrafficWorld, Vehicle } from './types';
 
@@ -71,111 +71,179 @@ function approachingJunctionCell(route: Route, arc: number): number {
 }
 
 /**
- * Whether the cell beyond a junction has room for one more car.
+ * Whether the road beyond a junction region has room for one more car, by measurement.
  *
  * This is the don't-block-the-intersection rule, and it is what keeps a ring of junctions
  * from gridlocking under its own traffic: a car is not let into a box whose far side is
- * already at a standstill. The old model had no notion of this at all — cars entered and
- * stopped dead inside, blocking every crossing stream until the deadlock timeout fired.
+ * already at a standstill. The question is asked at the far side of the vehicle's whole
+ * stretch through the region (`lastCell`), so admission means the entire region can be
+ * cleared, never just its first cell.
+ *
+ * "Room" is **measured, not boolean-per-lane**: the nearest stopped vehicle on the exit
+ * path must leave the entrant space to come to rest — one car length plus `s0` — with its
+ * rear past the region boundary (`EXIT_REST_MARGIN` covers the measurement's known
+ * errors; see its note in `tuning.ts`). The earlier form denied on *any* stopped vehicle
+ * anywhere in the exit lane, which held cars a whole junction back while a tile of
+ * packable road stood empty — the "queues far from the blockage" complaint. It also
+ * scanned only the lane one edge past the region, which made a car stopped in the strip
+ * *just* beyond the boundary — on the region-exit edge itself — invisible, and admitted
+ * an entrant whose rest then landed tail-in-the-box. Both edges are scanned now; anything
+ * farther starts at least a tile and a half past the boundary, beyond any rest position
+ * that matters here.
  *
  * It is a **rule about admission, not a guarantee that the far side drains**, and three
  * paths through the model make the stronger claim false. A route that ends at or just past
- * the junction has no exit lane and returns `true` unconditionally. A car that is *moving*
+ * the region has no exit lane and returns `true` unconditionally. A car that is *moving*
  * through the exit lane does not count as occupying it, deliberately — counting it turned a
  * plain corridor's stopped vehicle-ticks from 69 to 3999, which `expectFreeFlowing` in
  * `invariants.test.ts` now guards. And a candidate already `inside` is exempt in `admit`,
  * because stopping a car mid-junction is the very thing this rule exists to prevent. On top
  * of those, the game may park a car anywhere at all — `TrafficAdapter.setParked` — including
  * in an exit cell, and a queue behind a parked car is *supposed* to stand still for ever.
- * What the rule buys is that no car adds itself to that jam from inside a junction.
+ * What the rule buys is that no car adds itself to that jam from inside a region.
  *
- * "Room" is asked of the exit **lane** — the directed edge this route follows out of the
- * junction — and never of the exit cell. Cells are shared ground: the two directions of a
- * two-way road occupy the same cells, offset by `LANE_OFFSET`, so a stopped car in the
- * *oncoming* lane says nothing about whether this car can clear the box. Asking the cell
- * instead deadlocks the whole network with two vehicles: each waits at the same junction's
- * stop line from opposite sides, each therefore rests `s0` inside the other's exit cell,
- * and neither is ever admitted — measured, both stood for the full 20s run, and every car
- * that later queued behind them inherited the stall. Their maneuvers do not even conflict;
- * `admit` never got to ask, because the room test runs first. A stopped car in a *crossing*
- * lane of the exit cell is not this rule's business either: two lanes crossing in one cell
- * means three or more connections, which makes that cell a junction of its own, and its
- * admission — not this room test — is what serialises them.
+ * "Room" is asked of the exit **lanes** — directed edges this route follows out of the
+ * region — and never of cells. Cells are shared ground: the two directions of a two-way
+ * road occupy the same cells, offset by `LANE_OFFSET`, so a stopped car in the *oncoming*
+ * lane says nothing about whether this car can clear the box. Asking the cell instead
+ * deadlocks the whole network with two vehicles: each waits at the same junction's stop
+ * line from opposite sides, each therefore rests `s0` inside the other's exit cell, and
+ * neither is ever admitted — measured, both stood for the full 20s run. A stopped car in
+ * a *crossing* lane is not this rule's business either: two lanes crossing in one cell
+ * means three or more connections, which makes that cell a junction in the same region,
+ * and admission — not this room test — is what serialises them.
+ *
+ * `vehicleId` excludes the candidate itself: an inside candidate straddling the region
+ * boundary is otherwise its own blocker.
+ *
+ * Exported as the blocker *list* so `diagnose.ts` blames exactly the vehicles this rule
+ * counted, from the same scan — a diagnosis computing its own occupancy would drift.
  */
-function exitHasRoom(world: TrafficWorld, route: Route, junctionCell: number): boolean {
-  const exitLane = laneKeyForEdge(route, junctionCell + 1);
-  if (exitLane === null) return true;
+export function exitBlockers(
+  world: TrafficWorld, vehicleId: string, route: Route, lastCell: number,
+): string[] {
+  const blockers: string[] = [];
+  if (lastCell + 1 >= route.cells.length) return blockers;
+  const boundary = (route.cellDist[lastCell] + route.cellDist[lastCell + 1]) / 2;
+  // Rest centre = blocker centre - CAR_LENGTH - s0; rear = that - CAR_LENGTH/2. The rear
+  // must clear the boundary, so the blocker's centre must be at least this far along.
+  const needed = boundary + CAR_LENGTH * 1.5 + DEFAULT_IDM.s0 + EXIT_REST_MARGIN;
 
-  for (const other of world.vehicles) {
-    const theirRoute = world.routes.get(other.routeId);
-    if (!theirRoute) continue;
-    if (other.speed > STOPPED_SPEED) continue;
+  for (const edgeIndex of [lastCell, lastCell + 1]) {
+    const lane = laneKeyForEdge(route, edgeIndex);
+    if (lane === null) continue;
+    const edgeStart = route.cellDist[edgeIndex];
 
-    const edge = edgeIndexAt(theirRoute, other.arcDistance);
-    if (laneKeyForEdge(theirRoute, edge) === exitLane) return false;
+    for (const other of world.vehicles) {
+      if (other.id === vehicleId) continue;
+      const theirRoute = world.routes.get(other.routeId);
+      if (!theirRoute) continue;
+      if (other.speed > STOPPED_SPEED) continue;
+      const edge = edgeIndexAt(theirRoute, other.arcDistance);
+      if (laneKeyForEdge(theirRoute, edge) !== lane) continue;
+      // Their arc translated onto this route via the shared edge-start cell — the same
+      // construction `LaneIndex` uses for leader gaps, and carrying the same few-px
+      // cross-route error `EXIT_REST_MARGIN` exists to absorb.
+      const theirArc = edgeStart + (other.arcDistance - theirRoute.cellDist[edge]);
+      if (theirArc < needed) blockers.push(other.id);
+    }
   }
-  return true;
+  return blockers;
+}
+
+function exitHasRoom(
+  world: TrafficWorld, vehicleId: string, route: Route, lastCell: number,
+): boolean {
+  return exitBlockers(world, vehicleId, route, lastCell).length === 0;
 }
 
 /**
- * Offer every vehicle to the junctions that concern it.
+ * Offer every vehicle to the junction regions that concern it.
  *
- * A vehicle produces **up to two** candidates, and emitting only one deadlocks adjacent
- * junctions. A car mid-crossing A is bound by B's stop line (`nextJunctionCell` in
- * `obstacles.ts` looks strictly ahead), so if it is offered only to A it can never be
- * admitted to B, halts ~`s0` short of B's line while still inside A, and stays there
- * forever — blocking A's cross traffic. Adjacent junction cells are ordinary:
- * `_isIntersection` is `connectionCount >= 3`, over all eight directions.
+ * A region is a maximal set of 8-adjacent junction cells (`junctionComponents`), admitted
+ * as one unit: the candidate carries a maneuver per cell of its contiguous stretch through
+ * the region, so it is only ever admitted whole and never comes to rest between two
+ * junction cells — the rest position of a region's stop line is on plain ground by
+ * construction, which is what rules out the mutual inside-hold deadlock
+ * (`adjacentJunctions.test.ts`).
  *
- * So: the junction it is **inside** gets it as `inside: true`, which keeps A reserved
- * while the car physically occupies the box; the junction **ahead** gets it as an
- * entrant, which is what lets it earn its way out.
+ * A vehicle still produces **up to two** candidates, and emitting only one deadlocks
+ * *separated* junction pairs. A car mid-crossing region A is bound by region B's stop line
+ * (`nextJunctionCell` in `obstacles.ts` looks strictly ahead), so if it were offered only
+ * to A it could never be admitted to B, would halt short of B's line while still inside A,
+ * and stay there forever — blocking A's cross traffic. So: the region it is **inside**
+ * gets it as `inside: true`, which keeps A reserved while the car physically occupies it;
+ * the region **ahead** gets it as an entrant, which is what lets it earn its way out.
+ *
+ * One residue, documented rather than handled: a route that leaves a region and re-enters
+ * the *same* region later (a U through one compound) is offered only for the stretch it is
+ * inside — offering the re-entry too would put the same vehicle twice into one `admit`
+ * call, which its uniqueness precondition forbids. Such a car crosses the re-entry on its
+ * standing admission. Bounded and consistent, like the route-begins-inside gap below.
  */
 function buildJunctionCandidates(world: TrafficWorld): {
   byJunction: Map<number, JunctionCandidate[]>;
-  /** Vehicle id -> the junction it is queueing for, if any. Drives arrival-time ageing. */
+  /** Vehicle id -> the region it is queueing for, if any. Drives arrival-time ageing. */
   approaching: Map<string, number>;
+  /** Junction cell key -> region key, as `junctionComponents` built it. */
+  components: Map<number, number>;
 } {
+  const components = junctionComponents(world);
   const byJunction = new Map<number, JunctionCandidate[]>();
   const approaching = new Map<string, number>();
 
+  const regionOf = (route: Route, cellIndex: number): number | undefined => {
+    if (cellIndex < 0) return undefined;
+    const cell = route.cells[cellIndex];
+    return components.get(junctionKey(cell.gx, cell.gy));
+  };
+
   const offer = (v: Vehicle, route: Route, cellIndex: number, inside: boolean): void => {
     if (cellIndex < 0) return;
-    const junction = route.cells[cellIndex];
-    const before = route.cells[cellIndex - 1];
-    const after = route.cells[cellIndex + 1];
-    // No predecessor means the route *begins* inside the junction, so there is no approach
+    const regionKey = regionOf(route, cellIndex);
+    if (regionKey === undefined) return;
+    // No predecessor means the route *begins* inside the region, so there is no approach
     // to yield on and no entry direction to describe one with. `nextJunctionCell` looks
     // strictly ahead and so imposes no stop line there either: the vehicle crosses
     // unregulated, which is a gap, but a consistent one that cannot strand anybody.
-    if (before === undefined) return;
+    if (route.cells[cellIndex - 1] === undefined) return;
 
-    const entry = getDirection(before, junction);
-    // A route that *ends* in a junction cell has no exit cell — but skipping the candidate
-    // strands the vehicle for ever: `nextJunctionCell` still imposes the stop line, and with
-    // no candidate no admission can ever arrive to lift it. Measured on `[R,R,R,X]`, the car
-    // parked at arc 86.28 and never arrived in 3000 ticks.
-    //
-    // So it is offered with a straight-through maneuver instead. The vehicle actually stops
-    // at the cell centre, so the full-width chord over-reserves rather than under-reserves:
-    // it may yield to a crossing stream it would not quite have met, and can never fail to
-    // yield to one it would. Conservative in the safe direction, and it lets the vehicle be
-    // admitted and arrive.
-    const exit = after !== undefined ? getDirection(junction, after) : entry;
+    // The contiguous stretch of this region along the route. Route cells are adjacent (a
+    // highway span's far-apart neighbours are junction cells of different regions), so a
+    // stretch cannot silently skip ground.
+    let end = cellIndex;
+    while (end + 1 < route.cells.length && regionOf(route, end + 1) === regionKey) end++;
+
+    const maneuvers: CellManeuver[] = [];
+    for (let i = cellIndex; i <= end; i++) {
+      const cell = route.cells[i];
+      const entry = getDirection(route.cells[i - 1], cell);
+      const after = route.cells[i + 1];
+      // A route that *ends* in a junction cell has no exit cell — but skipping the
+      // candidate strands the vehicle for ever: `nextJunctionCell` still imposes the stop
+      // line, and with no candidate no admission can ever arrive to lift it. Measured on
+      // `[R,R,R,X]`, the car parked at arc 86.28 and never arrived in 3000 ticks.
+      //
+      // So it is offered with a straight-through maneuver instead. The vehicle actually
+      // stops at the cell centre, so the full-width chord over-reserves rather than
+      // under-reserves: it may yield to a crossing stream it would not quite have met, and
+      // can never fail to yield to one it would. Conservative in the safe direction, and
+      // it lets the vehicle be admitted and arrive.
+      const exit = after !== undefined ? getDirection(cell, after) : entry;
+      maneuvers.push({ cell: junctionKey(cell.gx, cell.gy), entry, exit });
+    }
 
     const candidate: JunctionCandidate = {
       vehicleId: v.id,
-      entry,
-      exit,
+      maneuvers,
       inside,
       arrivalTime: v.arrivalTime,
-      exitHasRoom: exitHasRoom(world, route, cellIndex),
+      exitHasRoom: exitHasRoom(world, v.id, route, end),
     };
 
-    const key = junctionKey(junction.gx, junction.gy);
-    const list = byJunction.get(key);
+    const list = byJunction.get(regionKey);
     if (list) list.push(candidate);
-    else byJunction.set(key, [candidate]);
+    else byJunction.set(regionKey, [candidate]);
   };
 
   for (const v of world.vehicles) {
@@ -186,16 +254,49 @@ function buildJunctionCandidates(world: TrafficWorld): {
     const insideCell = insideJunctionCell(route, v.arcDistance);
     const aheadCell = approachingJunctionCell(route, v.arcDistance);
 
-    offer(v, route, insideCell, true);
-    if (aheadCell !== insideCell) offer(v, route, aheadCell, false);
+    // Region identity, not cell identity: the cell ahead of a car mid-region is the
+    // region it is already inside, and offering it again as an entrant would duplicate
+    // the vehicle within one `admit` call.
+    const insideRegion = regionOf(route, insideCell);
+    const aheadRegion = regionOf(route, aheadCell);
 
-    if (aheadCell >= 0 && aheadCell !== insideCell) {
-      const ahead = route.cells[aheadCell];
-      approaching.set(v.id, junctionKey(ahead.gx, ahead.gy));
+    offer(v, route, insideCell, true);
+    if (aheadRegion !== undefined && aheadRegion !== insideRegion) {
+      offer(v, route, aheadCell, false);
+      approaching.set(v.id, aheadRegion);
     }
   }
 
-  return { byJunction, approaching };
+  return { byJunction, approaching, components };
+}
+
+export interface JunctionDecisions {
+  byJunction: Map<number, JunctionCandidate[]>;
+  /** Vehicle id -> the region it is queueing for, if any. */
+  approaching: Map<string, number>;
+  /** Region key -> the vehicle ids admitted this tick. */
+  admitted: Map<number, Set<string>>;
+  /** Junction cell key -> region key. What `admitted` and `byJunction` are keyed by. */
+  components: Map<number, number>;
+}
+
+/**
+ * The whole of one tick's junction decisions, exported so `diagnose.ts` can replay them.
+ *
+ * The stepper below and the diagnosis both go through this one function; a diagnosis that
+ * rebuilt candidates or admission its own way would drift from the decision it claims to
+ * explain the first time either changed.
+ *
+ * `admit` is called once **per junction region**. Feeding two regions' candidates into one
+ * call would rank vehicles against maneuvers they share no ground with.
+ */
+export function junctionDecisions(world: TrafficWorld): JunctionDecisions {
+  const { byJunction, approaching, components } = buildJunctionCandidates(world);
+  const admitted = new Map<number, Set<string>>();
+  for (const [key, candidates] of byJunction) {
+    admitted.set(key, admit(candidates));
+  }
+  return { byJunction, approaching, admitted, components };
 }
 
 /**
@@ -255,14 +356,7 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
   // set would instead mean "exempt from every stop line ahead": adjacent cells can both be
   // junctions (`_isIntersection` is `connectionCount >= 3`, over all eight directions), so a
   // car admitted to A would skip B's stop line and exit straight into B's cross traffic.
-  //
-  // `admit` is called once **per junction cell**. Feeding two junctions' candidates into
-  // one call would compute conflict geometry between maneuvers through unrelated cells.
-  const { byJunction, approaching } = buildJunctionCandidates(world);
-  const admitted = new Map<number, Set<string>>();
-  for (const [key, candidates] of byJunction) {
-    admitted.set(key, admit(candidates));
-  }
+  const { approaching, admitted, components } = junctionDecisions(world);
 
   // Pass one: decide.
   accelerations.length = world.vehicles.length;
@@ -273,7 +367,7 @@ export function step(world: TrafficWorld, dt: number): TrafficEvent[] {
     const route = world.routes.get(v.routeId);
     if (!route) { accelerations[i] = 0; continue; }
 
-    const constraint = nearestConstraint(world, v, laneIndex, admitted);
+    const constraint = nearestConstraint(world, v, laneIndex, admitted, components);
     // `Constraint.arc` and `LeaderInfo.gap` are already net of one car length. Subtracting
     // `CAR_LENGTH` again here would double-count it and hold cars a car length too far back.
     const gap = constraint.arc - v.arcDistance;

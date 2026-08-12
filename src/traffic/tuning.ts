@@ -79,6 +79,27 @@ export const STOP_LINE_SETBACK = CAR_LENGTH / 2;
  */
 export const ARRIVAL_SLACK = DEFAULT_IDM.s0 + 4;
 
+/**
+ * Safety pad on the measured don't-block-the-box test, px.
+ *
+ * `exitHasRoom` admits a car into a junction region when the nearest stopped vehicle
+ * beyond it leaves room for the car to come to rest with its rear past the region
+ * boundary. The rest position that measurement predicts carries two known errors, and the
+ * margin must cover their sum or a car's tail ends up inside the box by exactly the
+ * shortfall:
+ *
+ * - The 60Hz Euler integrator settles *outside* the IDM equilibrium by a measured
+ *   0.281px (see the overrun note in `step.ts`).
+ * - Cross-route lane offsets disagree with world geometry by up to low single-digit px
+ *   where the two routes' smoothing contexts differ; measured 0.00px on straight,
+ *   diagonal and turn-onto-shared-edge fixtures, and 1.4px on the first captured live
+ *   board between two queued cars on different routes.
+ *
+ * 2px covers both with headroom; every pixel more is a pixel of queue packing given away
+ * at each junction, which was the visible complaint (`no-exit-room` gaps of up to a tile).
+ */
+export const EXIT_REST_MARGIN = 2;
+
 /** How many route edges ahead the leader search scans. Beyond this, gaps are irrelevant. */
 export const LEADER_SCAN_EDGES = 3;
 

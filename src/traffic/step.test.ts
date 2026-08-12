@@ -338,9 +338,11 @@ describe('step', () => {
     expect(candidates.map(c => c.vehicleId)).toEqual(['a']);
 
     // The route runs west to east, so entry is Right and a straight-through exit is Right.
-    expect(candidates[0].entry).toBe(Direction.Right);
-    expect(candidates[0].exit).toBe(Direction.Right);
-    expect(candidates[0].exit).toBe(candidates[0].entry);
+    expect(candidates[0].maneuvers).toHaveLength(1);
+    const [m] = candidates[0].maneuvers;
+    expect(m.entry).toBe(Direction.Right);
+    expect(m.exit).toBe(Direction.Right);
+    expect(m.exit).toBe(m.entry);
   });
 
   it('still makes a car entering a terminal junction yield to crossing traffic', () => {
@@ -453,11 +455,15 @@ describe('step: exit room is a lane property, not a cell property', () => {
  * reaches its output. The stepper is the first place it becomes observable, and these are
  * the tests that observe it.
  */
-describe('step: junction admission across two adjacent junctions', () => {
-  it('keeps the junction it is inside reserved while it waits at the next one', () => {
+describe('step: junction regions (adjacent junction cells admitted as one)', () => {
+  it('never admits a car into a region whose exit is blocked — it rests on plain ground', () => {
+    // The mutual inside-hold deadlock (`adjacentJunctions.test.ts`) existed because a car
+    // could be admitted into the first of two adjacent junction cells and then come to
+    // rest *inside* it, at the second one\'s stop line. Region admission removes the state:
+    // the two cells are one region, don\'t-block-the-box is asked at the region\'s far
+    // side, and a car that cannot clear the whole region is never let in at all.
     const w = twoJunctionWorld();
     const down = w.routes.get('down')!;
-    const across = w.routes.get('across')!;
 
     // Premises, asserted rather than assumed: both cells really are intersections, they
     // really are adjacent, and the arithmetic below really is one tile per cell.
@@ -465,37 +471,31 @@ describe('step: junction admission across two adjacent junctions', () => {
     expect(segmentAt(down, 160)!.kind).toBe(SegmentKind.Intersection);
     expect(down.cellDist[3]).toBeCloseTo(3 * TILE_SIZE, 9);
     expect(down.cellDist[4]).toBeCloseTo(4 * TILE_SIZE, 9);
-    expect(across.cellDist[3]).toBeCloseTo(3 * TILE_SIZE, 9);
 
-    const A_ENTRY_DOWN = 100;  // midpoint of cellDist[2]=80 and cellDist[3]=120
-    const A_EXIT_DOWN = 140;   // midpoint of cellDist[3]=120 and cellDist[4]=160, = B's stop line
-    const A_ENTRY_ACROSS = 100;
+    const REGION_ENTRY_DOWN = 100;  // midpoint of cellDist[2]=80 and cellDist[3]=120
 
-    // `x` starts just inside A. `blocker` is parked in the cell beyond B, so B's exit has
-    // no room and `x` can never be admitted to B — it comes to rest inside A.
-    w.vehicles.push(car('x', 'down', 105));
+    // `blocker` is parked on the lane leaving the region (the edge from cellDist[5]=200),
+    // so the region\'s exit has no room for `x` and `x` must never be admitted.
+    w.vehicles.push(car('x', 'down', 40));
     w.vehicles.push(car('blocker', 'down', 200, 0, VehicleMode.Parked));
-    // `cross` approaches A from the west and conflicts with `x`'s southbound maneuver.
+    // `cross` shares the region\'s first cell; its own exit is free, so it flows.
     w.vehicles.push(car('cross', 'across', 40, 20));
 
-    for (let i = 0; i < 900; i++) step(w, DT);
+    const arrived = run(w, 900);
 
     const x = find(w, 'x');
-    const cross = find(w, 'cross');
+    // `x` did move — the test is not passing because it never started...
+    expect(x.arcDistance).toBeGreaterThan(40);
+    // ...came up to the region\'s stop line...
+    expect(x.arcDistance).toBeGreaterThan(REGION_ENTRY_DOWN - CAR_LENGTH);
+    // ...and rests entirely *before* the region: on plain road, blocking nobody\'s box.
+    expect(x.arcDistance).toBeLessThan(REGION_ENTRY_DOWN);
+    expect(x.speed).toBeLessThan(STOPPED_SPEED);
 
-    // `x` did move — the test is not passing because it never started.
-    expect(x.arcDistance).toBeGreaterThan(105);
-    // ...and stopped short of B's stop line, physically stranded inside A.
-    expect(x.arcDistance).toBeLessThan(A_EXIT_DOWN);
-    expect(x.arcDistance).toBeGreaterThan(A_ENTRY_DOWN);
-    expect(x.speed).toBeLessThan(1e-3);
-
-    // Which is the whole point: A stays reserved, so the crossing stream is held out.
-    // Offer `x` only to the junction ahead and A sees no candidate at all, admits `cross`,
-    // and drives it into an occupied box.
-    expect(cross.arcDistance).toBeLessThan(A_ENTRY_ACROSS);
-    // Non-vacuous: `cross` really did come up to the line rather than stall far away.
-    expect(cross.arcDistance).toBeGreaterThan(A_ENTRY_ACROSS - 3 * DEFAULT_IDM.s0);
+    // Which is what frees the crossing stream: the region is empty, so `cross` is
+    // admitted through the shared cell and completes. Under per-cell admission `x` stood
+    // *inside* the first cell and `cross` was walled out for ever.
+    expect(arrived.has('cross')).toBe(true);
   });
 
   it('lets a car admitted to both junctions cross them both', () => {
@@ -520,23 +520,63 @@ describe('step: junction admission across two adjacent junctions', () => {
     expect(find(w, 'cross').arcDistance).toBeGreaterThan(across.length - TILE_SIZE);
   });
 
-  it('holds a sticky arrival time against the junction it is queueing for', () => {
-    // A car mid-crossing A while blocked at B is admitted to A on every tick. Ageing
-    // against "admitted anywhere" would reset its clock forever and starve it at B, and
-    // re-stamping the clock every tick would do the same. Both must leave this untouched.
+  it('packs a queue through a junction when a full car fits beyond it', () => {
+    // Don't-block-the-box is a measurement, not a lane-occupancy bit. The binary form
+    // denied admission for any stopped car anywhere in the exit lane, which held this car
+    // a whole junction back — at arc ~54 — while 30px of packable road stood empty.
+    const w = createWorld();
+    addRoute(w, span('r', [[0, 0, R], [1, 0, R], [2, 0, X], [3, 0, R], [4, 0, R], [5, 0, R]]));
+    // Box spans [60, 100]. The blocker's centre at 130 leaves exactly enough room for a
+    // car to rest at 130 - CAR_LENGTH - s0 = 114 with its rear at 108, clear of the box.
+    w.vehicles.push(car('blocker', 'r', 130, 0, VehicleMode.Parked));
+    w.vehicles.push(car('x', 'r', 10, 30));
+
+    for (let i = 0; i < 900; i++) step(w, DT);
+
+    const x = find(w, 'x');
+    expect(x.speed).toBeLessThan(STOPPED_SPEED);
+    // Through the box and at rest behind the blocker, rear clear of the boundary at 100.
+    expect(x.arcDistance).toBeGreaterThan(100 + CAR_LENGTH / 2);
+    expect(x.arcDistance).toBeLessThan(130 - CAR_LENGTH);
+  });
+
+  it('refuses admission while the strip just past the box is occupied', () => {
+    // A car stopped between the box boundary and the next cell centre sits on the
+    // region-exit edge, which the old scan — one edge farther out — never looked at. The
+    // entrant was admitted and came to rest with its tail inside the box.
+    const w = createWorld();
+    addRoute(w, span('r', [[0, 0, R], [1, 0, R], [2, 0, X], [3, 0, R], [4, 0, R], [5, 0, R]]));
+    // 110 is 10px past the boundary: a car resting behind it would centre at 94 — in the box.
+    w.vehicles.push(car('blocker', 'r', 110, 0, VehicleMode.Parked));
+    w.vehicles.push(car('x', 'r', 10, 30));
+
+    for (let i = 0; i < 900; i++) step(w, DT);
+
+    const x = find(w, 'x');
+    expect(x.speed).toBeLessThan(STOPPED_SPEED);
+    // Held at the stop line, entirely before the box entry at 60 — not inside it.
+    expect(x.arcDistance).toBeLessThan(60);
+    expect(x.arcDistance).toBeGreaterThan(60 - CAR_LENGTH);
+  });
+
+  it('holds a sticky arrival time against the region it is queueing for', () => {
+    // Ageing against "admitted anywhere" would reset the clock of a car queueing behind a
+    // blocked region and starve it, and re-stamping every tick would do the same. Both
+    // must leave the stamp untouched for as long as the car queues.
     const w = twoJunctionWorld();
-    w.vehicles.push(car('x', 'down', 105));
+    w.vehicles.push(car('x', 'down', 40));
     w.vehicles.push(car('blocker', 'down', 200, 0, VehicleMode.Parked));
 
     for (let i = 0; i < 300; i++) step(w, DT);
 
     const x = find(w, 'x');
-    // Premise: it really is waiting inside A, not still rolling. Judged by the model's own
-    // stopped threshold: from outside the equilibrium the integrator's tail is asymptotic,
-    // so a hard zero is a statement about run length rather than about waiting.
+    // Premise: it really is waiting at the region's line (entry boundary 100), not still
+    // rolling. Judged by the model's own stopped threshold: from outside the equilibrium
+    // the integrator's tail is asymptotic, so a hard zero is a statement about run length
+    // rather than about waiting.
     expect(x.speed).toBeLessThan(STOPPED_SPEED);
-    expect(x.arcDistance).toBeGreaterThan(100);
-    expect(x.arcDistance).toBeLessThan(140);
+    expect(x.arcDistance).toBeGreaterThan(100 - CAR_LENGTH);
+    expect(x.arcDistance).toBeLessThan(100);
 
     const stamped = x.arrivalTime;
     expect(stamped).toBeGreaterThan(0);
@@ -559,24 +599,28 @@ describe('step: junction admission across two adjacent junctions', () => {
     // junction, and the crossing-city sweep lost a third of its throughput behind the crawl.
     //
     // So the stamp now survives admission, which is what makes a queue a queue, and is
-    // released only when no junction is queued for at all. The property the old test
-    // protected — that the clock does not run for ever — is still asserted, at the end.
+    // released only when no region is queued for at all — which for a car whose region is
+    // the last on its route means the moment it crosses the entry boundary. The property
+    // the old test protected — that the clock does not run for ever — is still asserted,
+    // at the end.
     const w = twoJunctionWorld();
-    w.vehicles.push(car('x', 'down', 105));
+    w.vehicles.push(car('x', 'down', 40));
     const blocker = car('blocker', 'down', 200, 0, VehicleMode.Parked);
     w.vehicles.push(blocker);
 
     for (let i = 0; i < 300; i++) step(w, DT);
     const x = find(w, 'x');
     const stamped = x.arrivalTime;
-    expect(stamped, 'it queued at B while the exit was blocked').toBeGreaterThan(0);
+    expect(stamped, 'it queued at the region while the exit was blocked').toBeGreaterThan(0);
 
-    // Clear the exit: `x` is admitted to B and keeps its place while it crosses.
+    // Clear the exit: `x` is admitted to the region and keeps its place while it enters.
     w.vehicles.splice(w.vehicles.indexOf(blocker), 1);
     step(w, DT);
     expect(x.arrivalTime, 'admission does not cost it its turn').toBe(stamped);
 
-    // B's centre is at arc 160; `down` carries no junction beyond it.
+    // The region's far cell is centred at arc 160; `down` carries no junction beyond it.
+    // The stamp may drop to the released sentinel once `x` is inside — what it must never
+    // do is jump to a *later* time, which is what would send it to the back of the queue.
     let restamped = false;
     for (let i = 0; i < 600 && x.arcDistance <= 160; i++) {
       step(w, DT);

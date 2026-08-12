@@ -3,6 +3,32 @@ import { DIRECTION_OFFSETS, YIELD_TO_DIRECTION } from '../utils/direction';
 import { LANE_OFFSET, TILE_SIZE } from '../constants';
 import { SIMULTANEOUS_EPS } from './tuning';
 
+/**
+ * One cell of a vehicle's path through a junction, with its crossing directions.
+ *
+ * A junction is a maximal region of 8-adjacent intersection cells, not a single cell —
+ * because a stop line rests a car `STOP_LINE_SETBACK` *before* a cell boundary, two
+ * adjacent junction cells put each one's stop line inside the other's box. Admitting them
+ * separately let two opposing cars each cross their first cell and come to rest inside the
+ * box the other needed, holding it with the absolute priority `inside` demands; the first
+ * captured board froze exactly so (`adjacentJunctions.test.ts`). Region admission means a
+ * car is only let in when it can traverse the whole region, so every rest position is on
+ * plain ground.
+ *
+ * `cell` is a `junctionKey`. Conflict between two candidates is decided cell by cell:
+ * chords in different cells cannot cross (each chord lives within its cell's bounds), and
+ * a merge *outside* the region is impossible — two streams joining one lane make the
+ * joining cell an intersection with three or more connections, which pulls it into the
+ * region.
+ */
+export interface CellManeuver {
+  cell: number;
+  /** Direction of travel into this cell. */
+  entry: Direction;
+  /** Direction of travel out of this cell. */
+  exit: Direction;
+}
+
 export interface JunctionCandidate {
   /**
    * Must be unique among the candidates of a single `admit` call. Ranks are keyed by it,
@@ -10,10 +36,8 @@ export interface JunctionCandidate {
    * the pair (destroying order independence), and loses one of them from the result set.
    */
   vehicleId: string;
-  /** Direction of travel into the junction. */
-  entry: Direction;
-  /** Direction of travel out of the junction. */
-  exit: Direction;
+  /** The legs of this vehicle's path through the region, in route order. Never empty. */
+  maneuvers: CellManeuver[];
   /**
    * Already past the entry boundary. Absolute priority.
    *
@@ -82,7 +106,22 @@ function segmentsIntersect(p: Chord, q: Chord): boolean {
 }
 
 /**
- * Whether two maneuvers through the same junction cannot be performed at once.
+ * Whether two candidates' paths through a junction region cannot be crossed at once:
+ * any cell both traverse, with conflicting chords there.
+ */
+export function candidatesConflict(a: JunctionCandidate, b: JunctionCandidate): boolean {
+  for (const ma of a.maneuvers) {
+    for (const mb of b.maneuvers) {
+      if (ma.cell === mb.cell && maneuversConflict(ma.entry, ma.exit, mb.entry, mb.exit)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether two maneuvers through the same junction cell cannot be performed at once.
  *
  * Two rules only: a shared exit is a merge, and crossing chords are a crossing. There is
  * no left/right/straight taxonomy — the design dropped "straight beats turning", and
@@ -149,8 +188,12 @@ function yieldRank(c: JunctionCandidate, all: JunctionCandidate[]): number {
   for (const other of all) {
     if (other.vehicleId === c.vehicleId) continue;
     if (!simultaneous(other.arrivalTime, c.arrivalTime)) continue;
-    if (!maneuversConflict(c.entry, c.exit, other.entry, other.exit)) continue;
-    if (other.entry === YIELD_TO_DIRECTION[c.entry]) rank++;
+    if (!candidatesConflict(c, other)) continue;
+    // "To the right of" is judged between the two *entries into the region*. For a
+    // single-cell junction this is exactly rechts vor links; for a multi-cell region the
+    // two entries may be into different cells, where right-of is an approximation — the
+    // order needs a consistent shape more than it needs traffic-law fidelity there.
+    if (other.maneuvers[0].entry === YIELD_TO_DIRECTION[c.maneuvers[0].entry]) rank++;
   }
   return rank;
 }
@@ -213,7 +256,7 @@ export function admit(candidates: JunctionCandidate[]): Set<string> {
 
     let blocked = false;
     for (const other of admitted) {
-      if (maneuversConflict(c.entry, c.exit, other.entry, other.exit)) {
+      if (candidatesConflict(c, other)) {
         blocked = true;
         break;
       }

@@ -25,12 +25,17 @@ import { Direction } from '../types';
 import { ALL_DIRECTIONS, CARDINAL_DIRECTIONS, YIELD_TO_DIRECTION } from '../utils/direction';
 import { LANE_OFFSET, TILE_SIZE } from '../constants';
 
+// All single-cell candidates share one junction cell: these tests exercise the order and
+// the conflict rules, for which one box is enough — the multi-cell region shape is pinned
+// where it is produced, in `step.test.ts` and `adjacentJunctions.test.ts`.
+const CELL = 0;
+
 function candidate(
   id: string, entry: Direction, exit: Direction,
   over: Partial<JunctionCandidate> = {},
 ): JunctionCandidate {
   return {
-    vehicleId: id, entry, exit,
+    vehicleId: id, maneuvers: [{ cell: CELL, entry, exit }],
     inside: false, arrivalTime: 0, exitHasRoom: true,
     ...over,
   };
@@ -43,10 +48,11 @@ function candidate(
 function pairwiseAdmit(candidates: JunctionCandidate[]): Set<string> {
   const out = new Set<string>();
   for (const c of candidates) {
+    const [m] = c.maneuvers;
     const mustYield = candidates.some(o =>
       o.vehicleId !== c.vehicleId
-      && maneuversConflict(c.entry, c.exit, o.entry, o.exit)
-      && o.entry === YIELD_TO_DIRECTION[c.entry]);
+      && maneuversConflict(m.entry, m.exit, o.maneuvers[0].entry, o.maneuvers[0].exit)
+      && o.maneuvers[0].entry === YIELD_TO_DIRECTION[m.entry]);
     if (!mustYield) out.add(c.vehicleId);
   }
   return out;

@@ -93,10 +93,12 @@ export interface LeaderInfo {
  *
  * Offsets are measured from the shared start cell of the edge, so two vehicles on
  * different routes through the same edge are directly comparable. Their smoothed geometry
- * differs slightly where the surrounding cells differ, so the offset carries a few pixels
- * of error; the standstill gap `s0` is 14px, an order of magnitude larger, and the
- * stepper's hard clamp catches anything pathological. Do not try to eliminate it — making
- * offsets exact would mean giving up the cross-route comparison this buys.
+ * can differ where the surrounding cells differ, so the offset can carry a few pixels of
+ * error — measured 0.00px on straight, diagonal and turn-onto-shared-edge fixtures, and
+ * 1.4px between two queued cross-route cars on the first captured live board. The
+ * standstill gap `s0` (4px) plus the stepper's hard clamp absorb it, and
+ * `EXIT_REST_MARGIN` covers it where admission measures room. Do not try to eliminate it —
+ * making offsets exact would mean giving up the cross-route comparison this buys.
  *
  * Parked vehicles are indexed like any other. They are physically sitting on the road, and
  * omitting them is precisely how followers came to drive onto them.
