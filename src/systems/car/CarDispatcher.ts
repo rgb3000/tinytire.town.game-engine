@@ -4,7 +4,6 @@ import type { Car } from '../../entities/Car';
 import { CarState } from '../../entities/Car';
 import type { Pathfinder } from '../../pathfinding/Pathfinder';
 import type { CarRouter } from './CarRouter';
-import { stepGridPos } from './CarRouter';
 import { manhattanDist, gridToPixelCenter } from '../../utils/math';
 import { computePathFuelCost } from '../../pathfinding/pathCost';
 import type { GasStationSystem } from '../GasStationSystem';
@@ -86,10 +85,10 @@ export class CarDispatcher {
         if (!path || path.length < 2) continue;
 
         // Do not spawn a car inside one that is already there. Asked of the simulation,
-        // which is the only thing that knows where cars are between `writeBack`s — dispatch
-        // runs before the tick's `writeBack`, so `car.pixelPos` would be one frame stale.
-        const p0 = stepGridPos(path[0]);
-        if (this.adapter.isCellOccupied(p0.gx, p0.gy)) continue;
+        // which is the only thing that knows where cars are between `writeBack`s, and
+        // asked in world space along the new route's opening — a cell-keyed test misses a
+        // body straddling the cell boundary. See {@link TrafficAdapter.spawnBlocked}.
+        if (this.adapter.spawnBlocked(path)) continue;
 
         // Pop an idle car from the house's idle list
         const car = idleCars.pop()!;

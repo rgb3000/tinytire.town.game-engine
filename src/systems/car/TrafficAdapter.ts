@@ -6,8 +6,8 @@ import type { HighwaySystem } from '../HighwaySystem';
 import type { CarTuning } from './CarTuning';
 import { CellType } from '../../types';
 import type { GridPos, PixelPos } from '../../types';
-import { INTERSECTION_SPEED_MULTIPLIER, TILE_SIZE } from '../../constants';
-import { gridToPixelCenter, pixelToGrid } from '../../utils/math';
+import { CAR_LENGTH, INTERSECTION_SPEED_MULTIPLIER, TILE_SIZE } from '../../constants';
+import { gridToPixelCenter } from '../../utils/math';
 import {
   buildRoute, sampleRoute, step, createWorld, routeCoversCell, cellsBetween,
   diagnoseWorld, formatDiagnosis, serializeWorld,
@@ -335,26 +335,45 @@ export class TrafficAdapter {
   }
 
   /**
-   * Is any vehicle currently standing on this grid cell?
+   * Would a new journey starting on `path` be born into traffic?
    *
-   * Replaces the lane-keyed occupancy map `CarSystem` rebuilt every tick and threaded
-   * through `dispatch`, whose single remaining use was refusing to spawn a car on top of
-   * another. Asked of the simulation's own positions rather than of `car.pixelPos`, because
-   * dispatch runs *before* `writeBack` and the mirror is therefore a tick stale.
+   * Dispatch's spawn guard. Asked of the simulation's own positions rather than of
+   * `car.pixelPos`, because dispatch runs *before* `writeBack` and the mirror is a tick
+   * stale — and asked **in world space along the route's opening**, not per grid cell.
+   * The predecessor (`isCellOccupied`) tested whether any vehicle's centre rounded to
+   * `path[0]`'s cell, which a 12px body defeats from across a boundary: the first
+   * dense-traffic capture showed newborn cars standing 6px inside cars whose centres lay
+   * in the neighbouring cell (`gap -6.0px` in the diagnosis), immovable, and seeds of the
+   * board-wide gridlock ring. Route openings carry house-specific smoothed geometry, so
+   * the only honest form of the question is distance between points.
    *
-   * Coarser than what it replaces in one direction: the old key was `(gx, gy, lane)`, so two
-   * cars in opposing lanes of the same tile were distinct. Merging the lanes can only refuse
-   * a spawn the old code would have allowed, and the cost of a refusal is that the car waits
-   * one dispatch interval — the safe direction for a check whose failure mode is spawning a
-   * car inside another one.
+   * The opening is sampled over the ground the newborn body and its first standstill
+   * need — `CAR_LENGTH + s0` of arc — and any vehicle within `CAR_LENGTH` of a sample
+   * blocks. Conservative by construction: a car the newborn *would* correctly brake for
+   * can also block, and an opposing-lane car 9.6px abeam can too. That is the safe
+   * direction — a refusal costs one dispatch interval, a false pass is a car
+   * materialising inside another one, which no amount of braking ever undoes.
+   *
+   * Departures from businesses and gas stations do not come through here: those journeys
+   * start where the car already physically stands.
    */
-  isCellOccupied(gx: number, gy: number): boolean {
+  spawnBlocked(path: PathStep[]): boolean {
+    const spans = this.buildSpans(path);
+    if (spans === null) return false; // installRoute will refuse it; not this check's verdict
+    const route = buildRoute({ id: '__spawn-probe__', spans });
+    if (route === null) return false;
+
+    const reach = Math.min(CAR_LENGTH + DEFAULT_IDM.s0, route.length);
+    const samples: Array<{ x: number; y: number }> = [];
+    for (let arc = 0; arc <= reach; arc += 4) samples.push(sampleRoute(route, arc));
+
     for (const vehicle of this.world.vehicles) {
-      const route = this.world.routes.get(vehicle.routeId);
-      if (!route) continue;
-      const sample = sampleRoute(route, vehicle.arcDistance);
-      const cell = pixelToGrid(sample.x, sample.y);
-      if (cell.gx === gx && cell.gy === gy) return true;
+      const theirRoute = this.world.routes.get(vehicle.routeId);
+      if (!theirRoute) continue;
+      const p = sampleRoute(theirRoute, vehicle.arcDistance);
+      for (const q of samples) {
+        if (Math.hypot(p.x - q.x, p.y - q.y) < CAR_LENGTH) return true;
+      }
     }
     return false;
   }

@@ -514,7 +514,6 @@ describe('CarSystem dispatch', () => {
     // Premise: the first car is still standing on the house tile when the next pass runs.
     town.tick(10);
     expect(town.adapter.getCurrentCell(first)).toEqual(house);
-    expect(town.adapter.isCellOccupied(house.gx, house.gy)).toBe(true);
     expect(town.cars.filter(c => c.state !== CarState.Idle)).toHaveLength(1);
 
     // Once it has driven off the tile, the second car follows it out.

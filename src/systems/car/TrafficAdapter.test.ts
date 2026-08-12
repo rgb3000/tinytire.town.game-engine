@@ -1880,7 +1880,7 @@ describe('TrafficAdapter.crossesPendingDeletionAhead', () => {
   });
 });
 
-describe('TrafficAdapter.isCellOccupied', () => {
+describe('TrafficAdapter.spawnBlocked', () => {
   it('finds a car by where the simulation holds it, not by where it was last drawn', () => {
     const grid = new Grid(20, 5);
     roadRow(grid, 6);
@@ -1888,14 +1888,31 @@ describe('TrafficAdapter.isCellOccupied', () => {
     const car = makeCar();
     adapter.installRoute(car, gridPath(6), false);
 
-    expect(adapter.isCellOccupied(0, 0)).toBe(true);
-    expect(adapter.isCellOccupied(3, 0)).toBe(false);
+    expect(adapter.spawnBlocked(gridPath(6))).toBe(true);
 
     for (let i = 0; i < 2000 && adapter.getArc(car) < 3 * 40; i++) adapter.update(1 / 60);
     // Deliberately no `writeBack`: the mirror on the car is stale and must not be the source.
     expect(car.pixelPos.x).toBeLessThan(40);
-    expect(adapter.isCellOccupied(0, 0)).toBe(false);
-    expect(adapter.isCellOccupied(3, 0)).toBe(true);
+    expect(adapter.spawnBlocked(gridPath(6))).toBe(false);
+  });
+
+  it('blocks on a body straddling the cell boundary, which a cell-keyed test waves through', () => {
+    // The regression from the first dense-traffic capture: newborn cars standing 6px
+    // inside cars whose *centres* lay in the neighbouring cell. `isCellOccupied`, this
+    // guard's cell-keyed predecessor, compared `pixelToGrid(centre)` against `path[0]`
+    // and answered "free" for exactly this state.
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+    const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+    const car = makeCar();
+    adapter.installRoute(car, gridPath(6), false);
+
+    // Drive it just across the first cell boundary: centre in cell 1, tail over cell 0.
+    for (let i = 0; i < 2000 && adapter.getArc(car) < 26; i++) adapter.update(1 / 60);
+    expect(adapter.getArc(car)).toBeGreaterThanOrEqual(26);
+    expect(adapter.getArc(car)).toBeLessThan(40);
+
+    expect(adapter.spawnBlocked(gridPath(6))).toBe(true);
   });
 
   it('forgets a despawned car', () => {
@@ -1905,6 +1922,6 @@ describe('TrafficAdapter.isCellOccupied', () => {
     const car = makeCar();
     adapter.installRoute(car, gridPath(6), false);
     adapter.removeVehicle(car);
-    expect(adapter.isCellOccupied(0, 0)).toBe(false);
+    expect(adapter.spawnBlocked(gridPath(6))).toBe(false);
   });
 });
