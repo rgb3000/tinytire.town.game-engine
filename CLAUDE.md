@@ -149,6 +149,20 @@ Three properties are worth knowing, because none is visible from any one file:
   needs no escape timeout. *Rechts vor links* shapes the order but cannot cycle it. The old
   model's `INTERSECTION_DEADLOCK_TIMEOUT` and `UNIVERSAL_STUCK_TIMEOUT` existed to break
   cycles that this construction cannot produce, and were deleted with it.
+
+  The guarantee covers only what the order decides, and `exitHasRoom` runs *before* the
+  order — a candidate with no exit room is skipped unconditionally — so a mistake there
+  deadlocks despite it. It happened: room was asked of the exit **cell**, cells are shared
+  by both directions of a two-way road, and a car waiting at a stop line rests ~`s0`
+  inside the oncoming car's exit cell. Two cars stopped at one junction from opposite
+  sides therefore denied each other forever — maneuvers that do not even conflict — and
+  one transient yield on any two-way road set it up, which is how whole boards froze with
+  a handful of cars. Room is now asked of the directed exit **lane** (`laneKeyForEdge`,
+  the leader search's own definition). The pure-model sweeps could not see this because
+  every fixture was one-directional, and they cannot honestly host a two-way one — pure
+  routes run through cell centres, so opposing cars overlap in world space by
+  construction. The two-way case is pinned at the adapter instead, on real lane geometry
+  (`keeps four two-way streams flowing` in `TrafficAdapter.test.ts`).
 - **Deceleration is computed once, at one site.** Every reason to slow down — a leader, a
   junction stop line, a route end — is collapsed into a single virtual leader and fed to IDM
   (`headway.ts`). Two independently-tuned ramps combined with `Math.min` was the old model
