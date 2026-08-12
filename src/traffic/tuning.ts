@@ -80,6 +80,27 @@ export const STOP_LINE_SETBACK = CAR_LENGTH / 2;
 export const ARRIVAL_SLACK = DEFAULT_IDM.s0 + 4;
 
 /**
+ * How far past its destination cell's centre a route into a building extends, px.
+ *
+ * Applied by `TrafficAdapter.installRoute` as `RouteInput.tailExtension` on journeys to a
+ * business or a gas station — the two destinations a car visually *enters* — and never on
+ * journeys home, which end in a despawn the moment they arrive.
+ *
+ * The resting nose position is what this tunes, and the arithmetic stacks three constants:
+ * the model parks `s0` short of the route end, so the car's centre rests at
+ * `centre + DESTINATION_OVERRUN - s0` and its nose half a `CAR_LENGTH` further. At 0 the
+ * nose reached `centre + 2` — a car length into the cell, barely past the door, which read
+ * as stopping at the entrance. `CAR_LENGTH / 2` = 6px carries the nose to `centre + 8`,
+ * the half-car-length-deeper entry asked for. The `Arrived` event fires `ARRIVAL_SLACK`
+ * before the extended end — at `centre - 2` — so arrival still triggers just before the
+ * centre, not after the car is already inside.
+ *
+ * Bounded above by the cell: the stub must stay well inside the destination cell's 20px
+ * half-extent or the car noses into whatever is drawn beyond it.
+ */
+export const DESTINATION_OVERRUN = CAR_LENGTH / 2;
+
+/**
  * Safety pad on the measured don't-block-the-box test, px.
  *
  * `exitHasRoom` admits a car into a junction region when the nearest stopped vehicle

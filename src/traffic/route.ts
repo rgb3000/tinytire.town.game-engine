@@ -119,6 +119,25 @@ export function buildRoute(input: RouteInput): Route | null {
 
   if (points.length < 2) return null;
 
+  // The tail extension continues the closing direction in a straight line. Appended
+  // before `cumDist` is computed so every consumer sees one consistent geometry; the last
+  // segment stretches to cover it, so the stub carries the destination cell's own speed
+  // limit and no consumer meets an arc no segment answers for. `cells`/`cellDist` are
+  // untouched — the stub is more of the last cell, not a new one.
+  const tail = input.tailExtension ?? 0;
+  if (tail > 0) {
+    const a = points[points.length - 2];
+    const b = points[points.length - 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    // cumDist is strictly increasing by construction (duplicate joints are dropped), so
+    // the closing pair cannot coincide; the guard documents the division's precondition.
+    if (len > 0) {
+      points.push({ x: b.x + ((b.x - a.x) / len) * tail, y: b.y + ((b.y - a.y) / len) * tail });
+      const last = segments[segments.length - 1];
+      if (last !== undefined) last.endArc += tail;
+    }
+  }
+
   const cumDist = new Array<number>(points.length);
   cumDist[0] = 0;
   for (let i = 1; i < points.length; i++) {

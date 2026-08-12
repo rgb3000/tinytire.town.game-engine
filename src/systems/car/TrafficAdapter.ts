@@ -12,7 +12,8 @@ import {
   buildRoute, sampleRoute, step, createWorld, routeCoversCell, cellsBetween,
   diagnoseWorld, formatDiagnosis, serializeWorld,
   SegmentKind, VehicleMode, TrafficEventKind,
-  DEFAULT_IDM, LEADER_SCAN_EDGES, MAX_DECELERATION, STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
+  DEFAULT_IDM, DESTINATION_OVERRUN, LEADER_SCAN_EDGES, MAX_DECELERATION,
+  STALL_WATCHDOG_SECONDS, STOPPED_SPEED,
 } from '../../traffic';
 import type { WorldDiagnosis, WorldSnapshot } from '../../traffic';
 import type {
@@ -115,7 +116,15 @@ export class TrafficAdapter {
   installRoute(car: Car, path: PathStep[], preservePosition: boolean): boolean {
     const spans = this.buildSpans(path);
     if (spans === null) return false;
-    const route = buildRoute({ id: car.id, spans });
+    // Journeys *into* a building get an entry stub past the connector centre, so the car
+    // visibly drives in rather than stopping at the door; see `DESTINATION_OVERRUN`. Read
+    // off the car's state, which every caller but one stamps before installing — the
+    // rescue manager stamps on success, so a rescue's install misses the stub. Cosmetic
+    // and rare; a wrong stub on a *home* journey, by contrast, would delay the despawn.
+    const tailExtension =
+      car.state === CarState.GoingToBusiness || car.state === CarState.GoingToGasStation
+        ? DESTINATION_OVERRUN : 0;
+    const route = buildRoute({ id: car.id, spans, tailExtension });
     if (route === null) return false;
     // Precondition 5. `LaneIndex.rebuild` and `findLeader` both skip a route with fewer than
     // two cells, because a lane key is an edge between two of them. A car on such a route is

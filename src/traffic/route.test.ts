@@ -79,6 +79,30 @@ describe('buildRoute', () => {
   });
 });
 
+describe('buildRoute with a tail extension', () => {
+  it('extends the curve straight past the last point, under the last segment', () => {
+    const cells = Array.from({ length: 3 }, (_, i) => ({
+      pos: { gx: i, gy: 0 }, kind: SegmentKind.Road, speedLimit: 40, pendingDeletion: false,
+    }));
+    const plain = buildRoute(route([{ kind: 'grid', cells }]))!;
+    const extended = buildRoute({ id: 'r1', spans: [{ kind: 'grid', cells }], tailExtension: 6 })!;
+
+    expect(extended.length).toBeCloseTo(plain.length + 6, 5);
+    // Straight on: the closing direction is eastbound, so the stub adds pure x.
+    const plainEnd = plain.points[plain.points.length - 1];
+    const stubEnd = extended.points[extended.points.length - 1];
+    expect(stubEnd.x).toBeCloseTo(plainEnd.x + 6, 5);
+    expect(stubEnd.y).toBeCloseTo(plainEnd.y, 5);
+    // No new cell and no new segment — the stub is more of the last cell.
+    expect(extended.cells).toEqual(plain.cells);
+    expect(extended.cellDist).toEqual(plain.cellDist);
+    expect(extended.segments.length).toBe(plain.segments.length);
+    expectContiguousSegments(extended);
+    // The stub answers speed-limit queries with the destination cell's own limit.
+    expect(speedLimitAt(extended, extended.length - 1)).toBe(40);
+  });
+});
+
 describe('buildRoute across adjacent grid spans', () => {
   /** Two grid spans meeting at a shared joint cell (2,0). */
   const adjacent = route([

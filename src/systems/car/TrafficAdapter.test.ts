@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Grid } from '../../core/Grid';
 import { Car, CarState } from '../../entities/Car';
+import { CAR_LENGTH } from '../../constants';
 import { TrafficAdapter } from './TrafficAdapter';
 import { CellType, Direction, GameColor } from '../../types';
 import { DEFAULT_GAME_CONSTANTS } from '../../constants';
@@ -1877,6 +1878,28 @@ describe('TrafficAdapter.crossesPendingDeletionAhead', () => {
 
     grid.setCell(3, 0, { pendingDeletion: true });
     expect(adapter.crossesPendingDeletionAhead(car)).toBe(true);
+  });
+});
+
+describe('TrafficAdapter.installRoute destination overrun', () => {
+  it('extends journeys into a building half a car past the connector, and only those', () => {
+    const grid = new Grid(20, 5);
+    roadRow(grid, 6);
+
+    const lengthFor = (state: CarState): number => {
+      const adapter = new TrafficAdapter(grid, DEFAULT_GAME_CONSTANTS);
+      const car = makeCar();
+      car.state = state;
+      expect(adapter.installRoute(car, gridPath(6), false)).toBe(true);
+      return adapter.getRouteFor(car)!.length;
+    };
+
+    const home = lengthFor(CarState.GoingHome);
+    // The two destinations a car visually enters get the stub...
+    expect(lengthFor(CarState.GoingToBusiness)).toBeCloseTo(home + CAR_LENGTH / 2, 5);
+    expect(lengthFor(CarState.GoingToGasStation)).toBeCloseTo(home + CAR_LENGTH / 2, 5);
+    // ...and a journey home ends where the path does: its arrival is a despawn.
+    expect(home).toBeCloseTo(lengthFor(CarState.Idle), 5);
   });
 });
 

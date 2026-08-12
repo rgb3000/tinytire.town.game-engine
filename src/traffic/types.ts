@@ -51,6 +51,16 @@ export type RouteSpan =
 export interface RouteInput {
   id: string;
   spans: RouteSpan[];
+  /**
+   * Extra arc, in px, appended past the final span's endpoint, continuing the closing
+   * direction as a straight stub. How the game says "drive *into* the destination":
+   * a route to a building ends on its connector cell's centre, and the model parks `s0`
+   * short of the route end, so without an extension a car noses barely past the centre
+   * and reads as stopping at the door. The stub belongs to the last cell — it adds no
+   * cell, no point of interest, and no segment of its own; the last segment simply
+   * stretches to cover it, keeping its speed limit.
+   */
+  tailExtension?: number;
 }
 
 export interface RouteSegment {
