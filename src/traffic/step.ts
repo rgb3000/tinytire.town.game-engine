@@ -1,7 +1,7 @@
 import { CAR_DEBUG, TILE_SIZE } from '../constants';
 import { getDirection } from '../utils/direction';
 import { idmAcceleration } from './headway';
-import { LaneIndex, edgeIndexAt } from './lanes';
+import { LaneIndex, edgeIndexAt, laneKeyForEdge } from './lanes';
 import { admit } from './junction';
 import type { JunctionCandidate } from './junction';
 import { nearestConstraint, junctionKey } from './obstacles';
@@ -76,19 +76,32 @@ function approachingJunctionCell(route: Route, arc: number): number {
  * stopped dead inside, blocking every crossing stream until the deadlock timeout fired.
  *
  * It is a **rule about admission, not a guarantee that the far side drains**, and three
- * paths through the model make the stronger claim false. A junction that ends a route has
- * no exit cell and returns `true` unconditionally. A car that is *moving* through the exit
- * cell does not count as occupying it, deliberately — counting it turned a plain corridor's
- * stopped vehicle-ticks from 69 to 3999, which `expectFreeFlowing` in `invariants.test.ts`
- * now guards. And a candidate already `inside` is exempt in `admit`, because stopping a car
- * mid-junction is the very thing this rule exists to prevent. On top of those, the game may
- * park a car anywhere at all — `TrafficAdapter.setParked` — including in an exit cell, and
- * a queue behind a parked car is *supposed* to stand still for ever. What the rule buys is
- * that no car adds itself to that jam from inside a junction.
+ * paths through the model make the stronger claim false. A route that ends at or just past
+ * the junction has no exit lane and returns `true` unconditionally. A car that is *moving*
+ * through the exit lane does not count as occupying it, deliberately — counting it turned a
+ * plain corridor's stopped vehicle-ticks from 69 to 3999, which `expectFreeFlowing` in
+ * `invariants.test.ts` now guards. And a candidate already `inside` is exempt in `admit`,
+ * because stopping a car mid-junction is the very thing this rule exists to prevent. On top
+ * of those, the game may park a car anywhere at all — `TrafficAdapter.setParked` — including
+ * in an exit cell, and a queue behind a parked car is *supposed* to stand still for ever.
+ * What the rule buys is that no car adds itself to that jam from inside a junction.
+ *
+ * "Room" is asked of the exit **lane** — the directed edge this route follows out of the
+ * junction — and never of the exit cell. Cells are shared ground: the two directions of a
+ * two-way road occupy the same cells, offset by `LANE_OFFSET`, so a stopped car in the
+ * *oncoming* lane says nothing about whether this car can clear the box. Asking the cell
+ * instead deadlocks the whole network with two vehicles: each waits at the same junction's
+ * stop line from opposite sides, each therefore rests `s0` inside the other's exit cell,
+ * and neither is ever admitted — measured, both stood for the full 20s run, and every car
+ * that later queued behind them inherited the stall. Their maneuvers do not even conflict;
+ * `admit` never got to ask, because the room test runs first. A stopped car in a *crossing*
+ * lane of the exit cell is not this rule's business either: two lanes crossing in one cell
+ * means three or more connections, which makes that cell a junction of its own, and its
+ * admission — not this room test — is what serialises them.
  */
 function exitHasRoom(world: TrafficWorld, route: Route, junctionCell: number): boolean {
-  const exitCell = route.cells[junctionCell + 1];
-  if (exitCell === undefined) return true;
+  const exitLane = laneKeyForEdge(route, junctionCell + 1);
+  if (exitLane === null) return true;
 
   for (const other of world.vehicles) {
     const theirRoute = world.routes.get(other.routeId);
@@ -96,8 +109,7 @@ function exitHasRoom(world: TrafficWorld, route: Route, junctionCell: number): b
     if (other.speed > STOPPED_SPEED) continue;
 
     const edge = edgeIndexAt(theirRoute, other.arcDistance);
-    const cell = theirRoute.cells[edge];
-    if (cell !== undefined && cell.gx === exitCell.gx && cell.gy === exitCell.gy) return false;
+    if (laneKeyForEdge(theirRoute, edge) === exitLane) return false;
   }
   return true;
 }

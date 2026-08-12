@@ -414,6 +414,34 @@ describe('step', () => {
   });
 });
 
+describe('step: exit room is a lane property, not a cell property', () => {
+  it('lets two head-on cars stopped at the same junction cross instead of deadlocking', () => {
+    // The two directions of a two-way road share their cells, so a car waiting at a stop
+    // line rests ~s0 inside the cell that is the *oncoming* car's exit. When exit room was
+    // asked of the cell, two cars stopped at the same junction from opposite sides each
+    // denied the other's admission — before `admit` ever compared their maneuvers, which
+    // do not even conflict — and both stood for the full run while everything queueing
+    // behind them inherited the stall. One transient yield anywhere on a two-way road is
+    // enough to set this state up in play, which is how a whole board froze with a handful
+    // of cars. The oncoming lane says nothing about whether the box can be cleared.
+    const w = createWorld();
+    addRoute(w, span('e', [[0, 3, R], [1, 3, R], [2, 3, R], [3, 3, X], [4, 3, R], [5, 3, R], [6, 3, R]]));
+    addRoute(w, span('west', [[6, 3, R], [5, 3, R], [4, 3, R], [3, 3, X], [2, 3, R], [1, 3, R], [0, 3, R]]));
+
+    // Both at rest at their stop lines (arc 100), parked by the model ~s0 short — the
+    // exact state a transient yield leaves behind.
+    w.vehicles.push(car('E', 'e', 100 - DEFAULT_IDM.s0, 0));
+    w.vehicles.push(car('W', 'west', 100 - DEFAULT_IDM.s0, 0));
+
+    const arrived = run(w, 1200);
+
+    // Both crossed the junction and finished the route; neither waited for the other.
+    expect(arrived).toEqual(new Set(['E', 'W']));
+    expect(find(w, 'E').arcDistance).toBeGreaterThan(120);
+    expect(find(w, 'W').arcDistance).toBeGreaterThan(120);
+  });
+});
+
 /**
  * Junction admission is keyed by junction *and* a vehicle may appear under two keys at
  * once. Task 6 structurally cannot show that second key mattering — `nearestConstraint`

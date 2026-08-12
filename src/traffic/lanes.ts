@@ -55,7 +55,7 @@ export function edgeIndexAt(route: Route, arc: number): number {
  * the polyline curves. That is harmless for leader ordering, which depends on arc rather
  * than heading, but nothing should try to infer geometry from a lane key.
  */
-function laneKeyForEdge(route: Route, edgeIndex: number): number | null {
+export function laneKeyForEdge(route: Route, edgeIndex: number): number | null {
   if (edgeIndex < 0 || edgeIndex + 1 >= route.cells.length) return null;
   const from = route.cells[edgeIndex];
   const to = route.cells[edgeIndex + 1];
