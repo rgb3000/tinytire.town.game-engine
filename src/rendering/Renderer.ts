@@ -19,6 +19,11 @@ import { CarRouteLayer } from './layers/CarRouteLayer';
 import type { TrafficAdapter } from '../systems/car/TrafficAdapter';
 import { HighwayLayer } from './layers/HighwayLayer';
 import { createBackdropPlane } from './backdrop';
+import {
+  poseFor, stepPose, poseSettled, positionFor,
+  ISO_ELEVATION, ISO_AZIMUTH, MAX_TILT, TOP_DOWN_AZIMUTH, CAMERA_DISTANCE, POSE_LERP,
+  type CameraPose,
+} from './cameraPose';
 import type { HighwaySystem } from '../systems/HighwaySystem';
 import type { HighwayPlacementState } from '../input/HighwayDrawer';
 import { Tool } from '../types';
@@ -28,11 +33,6 @@ const MAX_ZOOM = 8;
 const ZOOM_LERP = 0.25;
 const ZOOM_STEP = 0.05;
 const KEY_ZOOM_STEP = 0.08;
-const MAX_TILT = Math.PI / 3;
-const ISO_ELEVATION = 35 * (Math.PI / 180);
-const ISO_AZIMUTH = 45 * (Math.PI / 180);
-const TILT_LERP = 0.15;
-const CAMERA_DISTANCE = 3000;
 
 export class Renderer {
   protected scene: THREE.Scene;
@@ -88,13 +88,17 @@ export class Renderer {
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
-  // Tilt state
-  private currentTilt = 0;
-  private targetTilt = 0;
-
-  // Azimuth state
-  private currentAzimuth = 0;
-  private targetAzimuth = 0;
+  // Orientation state. One interpolable pose rather than tilt/azimuth/up-blend/extent as
+  // four independently-lerped scalars — see `cameraPose.ts` for why that mattered.
+  private currentPose!: CameraPose;
+  private targetPose!: CameraPose;
+  /**
+   * The angle the space+drag gesture has accumulated, in radians from vertical.
+   *
+   * Gesture bookkeeping, not camera state: a quaternion has no natural "add 0.003 rad and
+   * clamp to [0, MAX_TILT]", so the drag stays a scalar and `targetPose` is rebuilt from it.
+   */
+  private gestureTilt = 0;
   private isometricMode = false;
 
   // Zoom state
@@ -129,7 +133,9 @@ export class Renderer {
 
     // Camera — orthographic, top-down (frustum set by updateFrustum)
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
-    this.camera.up.set(0, 0, -1);
+    // No `up` vector: the pose carries the whole orientation and is applied as a quaternion.
+    this.currentPose = this.poseAt(0, TOP_DOWN_AZIMUTH);
+    this.targetPose = this.currentPose;
     this.updateFrustum();
     this.updateCameraPosition();
 
@@ -249,6 +255,12 @@ export class Renderer {
   resize(width: number, height: number): void {
     this.viewportWidth = width;
     this.viewportHeight = height;
+    // The pose carries the frustum extent, and the extent is fitted to viewport aspect, so a
+    // resize invalidates it. Settled cameras adopt the new extent outright; an in-flight one
+    // is left to converge, since snapping it would undo the transition it is halfway through.
+    const wasSettled = poseSettled(this.currentPose, this.targetPose);
+    this.rebuildTargetPose();
+    if (wasSettled) this.currentPose = this.targetPose;
     this.updateFrustum();
     this.needsRender = true;
   }
@@ -283,31 +295,54 @@ export class Renderer {
     }
   }
 
+  /**
+   * The pose family both gestures target, at the current viewport aspect.
+   *
+   * Manual tilt pitches around {@link TOP_DOWN_AZIMUTH} rather than azimuth zero, which is
+   * what makes it a pure pitch. At azimuth zero the old code rolled the map a full 90
+   * degrees over the first half of a drag, because it orbited towards screen-right while
+   * blending the up-vector towards world-Y; the two disagree by a quarter turn and the
+   * blend spun the scene to reconcile them.
+   */
+  private poseAt(tilt: number, azimuth: number): CameraPose {
+    return poseFor(tilt, azimuth, this.viewportWidth / this.viewportHeight);
+  }
+
+  /**
+   * Re-derive {@link targetPose} from whichever gesture currently owns the camera.
+   *
+   * The target is always describable by two angles; only the *animation* is a pose. Keeping
+   * it derived rather than stored is what lets {@link resize} rebuild it, since the frustum
+   * extent depends on viewport aspect.
+   */
+  private rebuildTargetPose(): void {
+    this.targetPose = this.isometricMode
+      ? this.poseAt(ISO_ELEVATION, ISO_AZIMUTH)
+      : this.poseAt(this.gestureTilt, TOP_DOWN_AZIMUTH);
+    this.needsRender = true;
+  }
+
   tiltBy(delta: number): void {
     if (this.isometricMode) return;
-    this.targetTilt = clamp(this.targetTilt + delta, 0, MAX_TILT);
-    this.needsRender = true;
+    this.gestureTilt = clamp(this.gestureTilt + delta, 0, MAX_TILT);
+    this.rebuildTargetPose();
   }
 
   resetTilt(): void {
     if (this.isometricMode) return;
-    this.targetTilt = 0;
-    this.needsRender = true;
+    this.gestureTilt = 0;
+    this.rebuildTargetPose();
   }
 
   setIsometric(enabled: boolean): void {
     this.isometricMode = enabled;
-    this.targetTilt = enabled ? ISO_ELEVATION : 0;
-    this.targetAzimuth = enabled ? ISO_AZIMUTH : 0;
-    this.needsRender = true;
+    // A manual tilt left mid-gesture must not survive the toggle and reappear on the way back.
+    this.gestureTilt = 0;
+    this.rebuildTargetPose();
   }
 
   getIsometric(): boolean {
     return this.isometricMode;
-  }
-
-  getCurrentZoom(): number {
-    return this.currentZoom;
   }
 
   // `getCameraState`/`setCameraState` used to live here, purely so the designer could carry
@@ -648,10 +683,9 @@ export class Renderer {
     const savedViewW = this.viewportWidth;
     const savedViewH = this.viewportHeight;
     const savedDpr = this.webglRenderer.getPixelRatio();
-    const savedTilt = this.currentTilt;
-    const savedTargetTilt = this.targetTilt;
-    const savedAzimuth = this.currentAzimuth;
-    const savedTargetAzimuth = this.targetAzimuth;
+    const savedPose = this.currentPose;
+    const savedTargetPose = this.targetPose;
+    const savedGestureTilt = this.gestureTilt;
     const canvas = this.webglRenderer.domElement;
 
     this.isCapturing = true;
@@ -665,12 +699,13 @@ export class Renderer {
       // Reset camera to show full grid (zoom=1, centered, no tilt/rotation)
       this.currentZoom = 1;
       this.targetZoom = 1;
-      this.currentTilt = 0;
-      this.targetTilt = 0;
-      this.currentAzimuth = 0;
-      this.targetAzimuth = 0;
       this.viewportWidth = captureW;
       this.viewportHeight = captureH;
+      // Flat and square-on, at the capture viewport's aspect. Set after the viewport fields
+      // because the pose's frustum extent is fitted to them.
+      this.gestureTilt = 0;
+      this.currentPose = this.poseAt(0, TOP_DOWN_AZIMUTH);
+      this.targetPose = this.currentPose;
       this.cameraCenterX = CANVAS_WIDTH / 2;
       this.cameraCenterZ = CANVAS_HEIGHT / 2;
       this.updateFrustum();
@@ -699,10 +734,9 @@ export class Renderer {
       canvas.style.height = savedViewH + 'px';
       this.currentZoom = savedZoom;
       this.targetZoom = savedTargetZoom;
-      this.currentTilt = savedTilt;
-      this.targetTilt = savedTargetTilt;
-      this.currentAzimuth = savedAzimuth;
-      this.targetAzimuth = savedTargetAzimuth;
+      this.currentPose = savedPose;
+      this.targetPose = savedTargetPose;
+      this.gestureTilt = savedGestureTilt;
       this.cameraCenterX = savedCenterX;
       this.cameraCenterZ = savedCenterZ;
       this.cameraTargetX = savedTargetX;
@@ -765,42 +799,17 @@ export class Renderer {
     this.groundTexture.dispose();
   }
 
+  /**
+   * The frustum half-extents to draw with, at a given zoom.
+   *
+   * The pose already carries the extent fitted to the viewport, so this only applies zoom.
+   * `IsometricRenderer` overrides {@link updateFrustum} and supplies its own extent instead.
+   */
   protected computeHalfSizes(zoom: number): { halfW: number; halfH: number } {
-    const viewAspect = this.viewportWidth / this.viewportHeight;
-
-    let contentW = CANVAS_WIDTH;
-    let contentH = CANVAS_HEIGHT;
-
-    const t = Math.min(this.currentTilt / 0.5, 1);
-    if (t > 0) {
-      const sinA = Math.abs(Math.sin(this.currentAzimuth));
-      const cosA = Math.abs(Math.cos(this.currentAzimuth));
-      const cosT = Math.max(Math.cos(this.currentTilt), 0.001);
-      const isoW = CANVAS_WIDTH * sinA + CANVAS_HEIGHT * cosA;
-      const isoH = (CANVAS_WIDTH * cosA + CANVAS_HEIGHT * sinA) * cosT;
-      contentW += (isoW - contentW) * t;
-      contentH += (isoH - contentH) * t;
-    }
-
-    const contentAspect = contentW / contentH;
-    let halfW: number;
-    let halfH: number;
-
-    if (viewAspect > contentAspect) {
-      halfH = contentH / 2;
-      halfW = halfH * viewAspect;
-    } else {
-      halfW = contentW / 2;
-      halfH = halfW / viewAspect;
-    }
-
-    // Smoothly zoom in by 25% when in isometric view
-    const isoZoomBoost = 1 + 0.25 * t;
-
-    halfW /= zoom * isoZoomBoost;
-    halfH /= zoom * isoZoomBoost;
-
-    return { halfW, halfH };
+    return {
+      halfW: this.currentPose.halfW / zoom,
+      halfH: this.currentPose.halfH / zoom,
+    };
   }
 
   protected updateFrustum(): void {
@@ -813,34 +822,22 @@ export class Renderer {
   }
 
   protected updateCameraPosition(): void {
-    const offsetX = Math.cos(this.currentAzimuth) * Math.sin(this.currentTilt) * CAMERA_DISTANCE;
-    const offsetY = Math.cos(this.currentTilt) * CAMERA_DISTANCE;
-    const offsetZ = Math.sin(this.currentAzimuth) * Math.sin(this.currentTilt) * CAMERA_DISTANCE;
-    this.camera.position.set(
-      this.cameraCenterX + offsetX,
-      offsetY,
-      this.cameraCenterZ + offsetZ,
+    // Orientation is set outright, not implied by `up` + `lookAt`. That pairing was the
+    // wobble: `up` was a linear blend of two vectors that froze at one end of the
+    // transition, so the scene rotated backwards until it thawed. A quaternion has no such
+    // seam — see `cameraPose.ts`.
+    this.camera.quaternion.copy(this.currentPose.quaternion);
+    this.camera.position.copy(
+      positionFor(this.currentPose, this.cameraCenterX, this.cameraCenterZ, CAMERA_DISTANCE),
     );
-    // Smooth up-vector transition to avoid spin/jump during tilt animation.
-    // At tilt=0 (top-down), up must lie in XZ plane; we rotate it by azimuth
-    // so that azimuth changes don't cause visible scene rotation.
-    // At tilt≥0.2 rad (~11°), up converges to world-Y (0,1,0).
-    const blend = Math.min(this.currentTilt / 0.5, 1);
-    const az = this.currentAzimuth;
-    this.camera.up.set(
-      -Math.sin(az) * (1 - blend),
-      blend,
-      -Math.cos(az) * (1 - blend),
-    ).normalize();
-    this.camera.lookAt(this.cameraCenterX, 0, this.cameraCenterZ);
+    this.camera.updateMatrixWorld(true);
   }
 
   private updateCamera(): void {
     const prevZoom = this.currentZoom;
     const prevCX = this.cameraCenterX;
     const prevCZ = this.cameraCenterZ;
-    const prevTilt = this.currentTilt;
-    const prevAzimuth = this.currentAzimuth;
+    const prevPose = this.currentPose;
 
     this.currentZoom = lerp(this.currentZoom, this.targetZoom, ZOOM_LERP);
     if (Math.abs(this.currentZoom - this.targetZoom) < 0.001) {
@@ -856,22 +853,19 @@ export class Renderer {
       this.cameraCenterZ = this.cameraTargetZ;
     }
 
-    this.currentTilt = lerp(this.currentTilt, this.targetTilt, TILT_LERP);
-    if (Math.abs(this.currentTilt - this.targetTilt) < 0.001) {
-      this.currentTilt = this.targetTilt;
-    }
-
-    this.currentAzimuth = lerp(this.currentAzimuth, this.targetAzimuth, TILT_LERP);
-    if (Math.abs(this.currentAzimuth - this.targetAzimuth) < 0.001) {
-      this.currentAzimuth = this.targetAzimuth;
+    // One geodesic step. Orientation and frustum extent travel together by construction, so
+    // they cannot disagree about how far through the transition they are.
+    if (poseSettled(this.currentPose, this.targetPose)) {
+      this.currentPose = this.targetPose;
+    } else {
+      this.currentPose = stepPose(this.currentPose, this.targetPose, POSE_LERP);
     }
 
     // Only update projection matrix and camera position when something changed
     const changed = this.currentZoom !== prevZoom ||
       this.cameraCenterX !== prevCX ||
       this.cameraCenterZ !== prevCZ ||
-      this.currentTilt !== prevTilt ||
-      this.currentAzimuth !== prevAzimuth;
+      this.currentPose !== prevPose;
 
     if (changed) {
       this.updateFrustum();

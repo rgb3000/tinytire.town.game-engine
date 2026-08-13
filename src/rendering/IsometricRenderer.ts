@@ -1,5 +1,6 @@
 import { Renderer } from './Renderer';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../constants';
+import { poseFor, TOP_DOWN_AZIMUTH } from './cameraPose';
 
 const ISO_ELEVATION = 35 * (Math.PI / 180); // ~35° elevation
 const ISO_AZIMUTH = 45 * (Math.PI / 180);   // 45° azimuth
@@ -36,7 +37,12 @@ export class IsometricRenderer extends Renderer {
   protected override updateFrustum(): void {
     // Use a fixed zoom that shows a nice portion of the map
     const zoom = 4.0;
-    const { halfW, halfH } = this.computeHalfSizes(zoom);
+    // This backdrop's isometric look comes entirely from `updateCameraPosition` above, not
+    // from the base class's pose, so it needs the *flat* extent: asking `computeHalfSizes`
+    // would inherit whatever pose the base class holds, which is only incidentally flat here.
+    const flat = poseFor(0, TOP_DOWN_AZIMUTH, this.viewportWidth / this.viewportHeight);
+    const halfW = flat.halfW / zoom;
+    const halfH = flat.halfH / zoom;
 
     this.camera.left = -halfW;
     this.camera.right = halfW;
