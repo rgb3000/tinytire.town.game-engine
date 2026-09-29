@@ -130,7 +130,6 @@ summary {
 .card,
 #panel {
   background: var(--surface);
-  backdrop-filter: blur(10px) saturate(1.4);
   border: 1px solid var(--line);
   border-radius: var(--r);
   box-shadow: var(--lift);
