@@ -74,9 +74,17 @@ export class BusinessLayer {
     this.isDirty = true;
   }
 
-  update(scene: THREE.Scene, businesses: Business[]): void {
+  /**
+   * Returns whether anything that casts a shadow appeared or went away: a business added,
+   * removed or rebuilt, or a demand pin shown or hidden. A pin's pulse is not counted —
+   * the baked shadow keeps whatever size the pin had when it was last drawn, which on a
+   * sphere that small is not visible.
+   */
+  update(scene: THREE.Scene, businesses: Business[]): boolean {
+    let shadowsChanged = false;
     if (this.isDirty) {
       this.isDirty = false;
+      shadowsChanged = true;
       for (const [id, group] of this.businessMeshes) {
         scene.remove(group);
         disposeGroup(group, this.sharedResources);
@@ -102,6 +110,7 @@ export class BusinessLayer {
         this.businessMeshes.delete(id);
         this.demandPinRefs.delete(id);
         this.connectorMeshes.delete(id);
+        shadowsChanged = true;
         const sprite = this.debugSprites.get(id);
         if (sprite) {
           scene.remove(sprite);
@@ -119,6 +128,7 @@ export class BusinessLayer {
         this.businessMeshes.set(biz.id, group);
         this.demandPinRefs.set(biz.id, pins);
         this.connectorMeshes.set(biz.id, connector);
+        shadowsChanged = true;
       }
 
       const pins = this.demandPinRefs.get(biz.id)!;
@@ -126,6 +136,7 @@ export class BusinessLayer {
       const pulseScale = shouldPulse ? 1 + 0.25 * Math.sin(Date.now() * 0.006) : 1;
       for (let i = 0; i < MAX_DEMAND_PINS; i++) {
         const visible = i < biz.demandPins;
+        if (pins[i].visible !== visible) shadowsChanged = true;
         pins[i].visible = visible;
         if (visible && shouldPulse) {
           pins[i].scale.set(pulseScale, pulseScale, pulseScale);
@@ -196,6 +207,7 @@ export class BusinessLayer {
         sprite.position.set(px + 10, 2, pz + 15);
       }
     }
+    return shadowsChanged;
   }
 
   private createBusinessMesh(biz: Business): { group: THREE.Group; pins: THREE.Mesh[]; connector: THREE.Mesh } {

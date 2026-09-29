@@ -238,6 +238,21 @@ deliberately static: animated ripples were tried and removed, because anything a
 defeats the renderer's render-only-when-dirty skip and redraws every frame. Snow caps are a material rule in
 `ObstacleLayer.rockColor`, from `SNOW_MIN_LEVELS` terraces up.
 
+**Drawing on demand.** `Renderer` draws a frame only when `needsRender` is set. `Game` sets
+it once per simulation tick while playing, on a state change, and on any pointer event
+(`InputHandler.version`); everything else raises its own dirty flag. Wall-clock pulses
+(unconnected connectors, near-full pins, stranded cars) draw at ~30 fps on their own, and
+`GameLoop` draws at most every 10 ms, so a 120 Hz display gets 60. A layer that changes
+the picture without one of those triggers will look frozen until something else draws.
+
+**Shadows are baked.** `shadowMap.autoUpdate` is off: the 4096² soft (VSM) map is redrawn
+only when `shadowsDirty` is set, at most every 100 ms. Redrawing it every frame was ~10 of
+~12 ms of GPU time. Cars cast nothing; each draws a car-shaped patch offset along the
+sun (`carShadow.ts`, `sun.ts`). Any new shadow caster, or a change to an existing one, must
+reach `shadowsDirty`, through `markGroundDirty`/`markHighwayDirty` or a layer's
+`update()` return value as `BuildingLayer` does. Otherwise its shadow stays where it was
+last drawn.
+
 **Scenery** (trees, bushes, pebbles) is decoration only. `scenery.ts` plans it once per
 renderer from a random seed — pure, Node-tested — and `SceneryLayer` only toggles visibility
 afterwards: an item shows while its cell is `CellType.Empty` and no highway passes over it.

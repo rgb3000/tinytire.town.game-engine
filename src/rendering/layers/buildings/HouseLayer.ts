@@ -74,9 +74,15 @@ export class HouseLayer {
     this.isDirty = true;
   }
 
-  update(scene: THREE.Scene, houses: House[], cars: Car[]): void {
+  /**
+   * Returns whether anything that casts a shadow appeared or went away — a house added,
+   * removed or rebuilt. Parked cars and delivery balls cast none, so they do not count.
+   */
+  update(scene: THREE.Scene, houses: House[], cars: Car[]): boolean {
+    let shadowsChanged = false;
     if (this.isDirty) {
       this.isDirty = false;
+      shadowsChanged = true;
       for (const [, group] of this.houseMeshes) {
         scene.remove(group);
         disposeGroup(group, this.sharedResources);
@@ -95,6 +101,7 @@ export class HouseLayer {
         this.houseMeshes.delete(id);
         this.parkedCarMeshes.delete(id);
         this.deliveryBallRefs.delete(id);
+        shadowsChanged = true;
       }
     }
 
@@ -104,6 +111,7 @@ export class HouseLayer {
         scene.add(group);
         this.houseMeshes.set(house.id, group);
         this.parkedCarMeshes.set(house.id, parkedCars);
+        shadowsChanged = true;
       }
 
       // Update parked car visibility
@@ -169,6 +177,7 @@ export class HouseLayer {
         ballRef.mesh.instanceMatrix.needsUpdate = true;
       }
     }
+    return shadowsChanged;
   }
 
   private createHouseMesh(house: House): { group: THREE.Group; parkedCars: THREE.Group[] } {

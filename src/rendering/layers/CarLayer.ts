@@ -3,6 +3,16 @@ import { type Car, CarState } from '../../entities/Car';
 import { COLOR_MAP, CAR_WIDTH, CAR_LENGTH, GROUND_Y_POSITION } from '../../constants';
 import type { GameColor } from '../../types';
 import { lerp } from '../../utils/math';
+import { groundShadowOffset } from '../sun';
+import {
+  carShadowTexels, CAR_SHADOW_TEX_WIDTH, CAR_SHADOW_TEX_HEIGHT,
+  CAR_SHADOW_LENGTH_SCALE, CAR_SHADOW_WIDTH_SCALE, CAR_SHADOW_HEIGHT,
+} from './carShadow';
+
+/** Where each car's shadow patch sits relative to the car, in world space. See `carShadow.ts`. */
+const SHADOW_OFFSET = groundShadowOffset(CAR_SHADOW_HEIGHT);
+/** Just above the car's own base, so the patch lies on whatever surface the car is on. */
+const SHADOW_Y = 0.25;
 
 function roundedRectShape(w: number, h: number, r: number): THREE.Shape {
   const shape = new THREE.Shape();
@@ -45,6 +55,9 @@ export class CarLayer {
   private bumperMaterial: THREE.MeshStandardMaterial;
   private tireGeometry: THREE.CylinderGeometry;
   private tireMaterial: THREE.MeshStandardMaterial;
+  private shadowGeometry: THREE.PlaneGeometry;
+  private shadowTexture: THREE.DataTexture;
+  private shadowMaterial: THREE.MeshBasicMaterial;
   private activeCarIds = new Set<string>();
 
   constructor() {
@@ -83,6 +96,15 @@ export class CarLayer {
     this.tireGeometry = new THREE.CylinderGeometry(tireRadius, tireRadius, tireWidth, 8);
     this.tireGeometry.rotateX(Math.PI / 2);
     this.tireMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+
+    // Cars cast no shadow into the shadow map (see `carShadow.ts`); this patch stands in.
+    this.shadowGeometry = new THREE.PlaneGeometry(CAR_LENGTH * CAR_SHADOW_LENGTH_SCALE, CAR_WIDTH * CAR_SHADOW_WIDTH_SCALE);
+    this.shadowGeometry.rotateX(-Math.PI / 2);
+    this.shadowTexture = new THREE.DataTexture(carShadowTexels(), CAR_SHADOW_TEX_WIDTH, CAR_SHADOW_TEX_HEIGHT);
+    this.shadowTexture.magFilter = THREE.LinearFilter;
+    this.shadowTexture.minFilter = THREE.LinearFilter;
+    this.shadowTexture.needsUpdate = true;
+    this.shadowMaterial = new THREE.MeshBasicMaterial({ map: this.shadowTexture, transparent: true, depthWrite: false });
   }
 
   setSelectedCarId(id: string | null): void {
@@ -183,19 +205,16 @@ export class CarLayer {
 
         // Cab base (front)
         const cabBase = new THREE.Mesh(this.cabBaseGeometry, mat);
-        cabBase.castShadow = true;
         cabBase.position.x = cabOffsetX;
         group.add(cabBase);
 
         // Cab roof (narrower, on top of base)
         const cabRoof = new THREE.Mesh(this.cabRoofGeometry, mat);
-        cabRoof.castShadow = true;
         cabRoof.position.set(cabOffsetX, 1.8, 0);
         group.add(cabRoof);
 
         // Bed floor (rear, low)
         const bedFloor = new THREE.Mesh(this.bedFloorGeometry, mat);
-        bedFloor.castShadow = true;
         bedFloor.position.x = bedOffsetX;
         group.add(bedFloor);
 
@@ -226,7 +245,6 @@ export class CarLayer {
 
         // Load (pin sphere in the bed, child index 8)
         const load = new THREE.Mesh(this.loadGeometry, this.getLoadMaterial(car.color));
-        load.castShadow = true;
         load.position.set(bedOffsetX, 6, 0);
         load.visible = false;
         group.add(load);
@@ -243,9 +261,13 @@ export class CarLayer {
         for (const tp of tirePositions) {
           const tire = new THREE.Mesh(this.tireGeometry, this.tireMaterial);
           tire.position.set(tp.x, 0, tp.z);
-          tire.castShadow = true;
           group.add(tire);
         }
+
+        // Shadow patch (child index 13). Last, so the fixed indices above are unchanged.
+        const shadow = new THREE.Mesh(this.shadowGeometry, this.shadowMaterial);
+        shadow.renderOrder = 1;
+        group.add(shadow);
 
         scene.add(group);
         this.meshes.set(car.id, group);
@@ -283,6 +305,16 @@ export class CarLayer {
       // Interpolate rotation
       const angle = lerpAngle(car.prevRenderAngle, car.renderAngle, alpha);
       group.rotation.y = -angle;
+
+      // The shadow's offset is fixed in world space — it points away from the sun whichever
+      // way the car faces — so it is turned back through the car's own heading.
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      group.children[13].position.set(
+        SHADOW_OFFSET.x * cos + SHADOW_OFFSET.z * sin,
+        SHADOW_Y,
+        -SHADOW_OFFSET.x * sin + SHADOW_OFFSET.z * cos,
+      );
 
       // Highlight selected car
       const isSelected = car.id === this.selectedCarId;
@@ -336,6 +368,9 @@ export class CarLayer {
     this.loadMaterialCache.clear();
     this.tireGeometry.dispose();
     this.tireMaterial.dispose();
+    this.shadowGeometry.dispose();
+    this.shadowTexture.dispose();
+    this.shadowMaterial.dispose();
     for (const [, mat] of this.materialCache) {
       mat.dispose();
     }

@@ -23,10 +23,16 @@ export class BuildingLayer {
     this.businessLayer.setGameColors(colors);
   }
 
-  update(scene: THREE.Scene, houses: House[], businesses: Business[], gasStations: GasStation[] = [], cars: Car[] = []): void {
-    this.houseLayer.update(scene, houses, cars);
-    this.businessLayer.update(scene, businesses);
-    this.gasStationLayer.update(scene, gasStations);
+  /**
+   * Returns whether any building's shadow-casting geometry changed, which is what tells the
+   * renderer its baked shadow map is stale. Every sub-layer runs regardless; `||` would
+   * short-circuit the later ones.
+   */
+  update(scene: THREE.Scene, houses: House[], businesses: Business[], gasStations: GasStation[] = [], cars: Car[] = []): boolean {
+    const houseShadows = this.houseLayer.update(scene, houses, cars);
+    const businessShadows = this.businessLayer.update(scene, businesses);
+    const stationShadows = this.gasStationLayer.update(scene, gasStations);
+    return houseShadows || businessShadows || stationShadows;
   }
 
   dispose(scene: THREE.Scene): void {

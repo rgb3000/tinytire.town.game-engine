@@ -30,6 +30,7 @@ import type { HighwaySystem } from '../systems/HighwaySystem';
 import type { HighwayPlacementState } from '../input/HighwayDrawer';
 import { Tool, CellType } from '../types';
 import { CarState } from '../entities/Car';
+import { SUN_OFFSET } from './sun';
 import type { ColorTheme, MountainTriangles, LakeTriangles } from '../maps/types';
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
@@ -42,6 +43,13 @@ const KEY_ZOOM_STEP = 0.08;
  * threshold at exactly two frames would, with timestamp jitter, often wait for a third.
  */
 const AMBIENT_FRAME_INTERVAL_MS = 30;
+/**
+ * The minimum gap between two redraws of the baked shadow map. A redraw costs about 10 ms
+ * of GPU time, and a road drag or a highway control-point drag marks the world dirty on
+ * every frame; this keeps such a gesture from paying that sixty times a second. The first
+ * change after a quiet spell is drawn at once, and the last one of a burst is never lost.
+ */
+const SHADOW_REFRESH_INTERVAL_MS = 100;
 
 export class Renderer {
   protected scene: THREE.Scene;
@@ -91,6 +99,12 @@ export class Renderer {
   private hasPulsingEntities = false;
   /** `performance.now()` of the last frame actually drawn. */
   private lastDrawTime = -Infinity;
+  /**
+   * Whether something that casts a shadow has changed since the shadow map was last drawn.
+   * Starts true: the map does not exist until the first redraw.
+   */
+  private shadowsDirty = true;
+  private lastShadowUpdate = -Infinity;
   private mountainColor: string | undefined;
   private waterColor: string | undefined;
   private shorelineColor: string | undefined;
@@ -163,9 +177,9 @@ export class Renderer {
 
     const dirLight = new THREE.DirectionalLight(0xfff0da, 1.7);
     dirLight.position.set(
-      CANVAS_WIDTH / 2 - 800,
-      1100,
-      CANVAS_HEIGHT / 2 + 1200,
+      CANVAS_WIDTH / 2 + SUN_OFFSET.x,
+      SUN_OFFSET.y,
+      CANVAS_HEIGHT / 2 + SUN_OFFSET.z,
     );
     dirLight.target.position.set(CANVAS_WIDTH / 2, 0, CANVAS_HEIGHT / 2);
     dirLight.castShadow = true;
@@ -182,6 +196,13 @@ export class Renderer {
     dirLight.shadow.camera.far = 5000;
     this.scene.add(dirLight);
     this.scene.add(dirLight.target);
+
+    // The shadow map is baked: drawn when a shadow caster changes, not on every frame.
+    // Re-rendering and blurring it each frame was ~10 of ~12 ms of GPU time, spent almost
+    // entirely on geometry that had not moved — the only casters that move every frame are
+    // cars, and they now draw a patch of their own instead (`carShadow.ts`). Every change
+    // to a caster must reach `shadowsDirty`; see the sites that set it.
+    this.webglRenderer.shadowMap.autoUpdate = false;
 
     // Offscreen canvas for terrain (scaled by DPR for sharp rendering)
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -576,11 +597,14 @@ export class Renderer {
 
   markGroundDirty(): void {
     this.groundDirty = true;
+    // Everything a ground edit can change casts: roads, buildings, scenery, terrain.
+    this.shadowsDirty = true;
     this.needsRender = true;
   }
 
   markHighwayDirty(): void {
     this.highwayDirty = true;
+    this.shadowsDirty = true;
     this.needsRender = true;
   }
 
@@ -711,6 +735,7 @@ export class Renderer {
         setTimeout(() => {
           this.roadLayer.update(this.scene);
           this.roadRebuildScheduled = false;
+          this.shadowsDirty = true;
           // The frame that marked the ground dirty has already been drawn without these
           // meshes. Nothing else guarantees another one follows.
           this.needsRender = true;
@@ -734,7 +759,7 @@ export class Renderer {
     this.prevActiveTool = activeTool;
 
     // Update 3D meshes
-    this.buildingLayer.update(this.scene, houses, businesses, gasStations, cars);
+    if (this.buildingLayer.update(this.scene, houses, businesses, gasStations, cars)) this.shadowsDirty = true;
     this.carLayer.update(this.scene, cars, isPaused ? 1 : alpha);
     this.debugLayer.update(this.scene, spawnBounds);
     if (ROAD_DEBUG) this.roadDebugLayer.update(this.scene, this.grid, cars, this.trafficAdapter);
@@ -745,6 +770,13 @@ export class Renderer {
     } else {
       this.carRouteLayer.clear(this.scene);
     }
+    if (this.shadowsDirty && now - this.lastShadowUpdate >= SHADOW_REFRESH_INTERVAL_MS) {
+      this.webglRenderer.shadowMap.needsUpdate = true;
+      this.shadowsDirty = false;
+      this.lastShadowUpdate = now;
+      this.needsRender = true;
+    }
+
     // Render only when something changed
     if (this.needsRender && !this.isCapturing) {
       this.webglRenderer.render(this.scene, this.camera);

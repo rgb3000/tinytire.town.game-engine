@@ -34,13 +34,16 @@ export class GasStationLayer {
     this.plateMat.color.set(color);
   }
 
-  update(scene: THREE.Scene, gasStations: GasStation[]): void {
+  /** Returns whether a station — every part of which casts a shadow — was added or removed. */
+  update(scene: THREE.Scene, gasStations: GasStation[]): boolean {
+    let shadowsChanged = false;
     const gsIds = new Set(gasStations.map(gs => gs.id));
     for (const [id, group] of this.gasStationMeshes) {
       if (!gsIds.has(id)) {
         scene.remove(group);
         disposeGroup(group, this.sharedResources);
         this.gasStationMeshes.delete(id);
+        shadowsChanged = true;
       }
     }
     for (const gs of gasStations) {
@@ -48,8 +51,10 @@ export class GasStationLayer {
         const group = this.createGasStationMesh(gs);
         scene.add(group);
         this.gasStationMeshes.set(gs.id, group);
+        shadowsChanged = true;
       }
     }
+    return shadowsChanged;
   }
 
   private createGasStationMesh(gs: GasStation): THREE.Group {
