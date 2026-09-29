@@ -712,12 +712,6 @@ export class Renderer {
     } else {
       this.carRouteLayer.clear(this.scene);
     }
-    // Water ripples are animated, so a board with a lake redraws every frame.
-    if (this.terrainDetailLayer.hasWater) {
-      this.terrainDetailLayer.tick(performance.now() / 1000);
-      this.needsRender = true;
-    }
-
     // Render only when something changed
     if (this.needsRender && !this.isCapturing) {
       this.webglRenderer.render(this.scene, this.camera);

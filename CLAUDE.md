@@ -233,9 +233,9 @@ pads/rocks in lakes — lives in `TerrainDetailLayer`, apart from `ObstacleLayer
 water is a translucent sheet just above the lake's top terrace, so the existing terraces read
 as the lakebed. Placement is `terrainDecor.ts`: pure, driven by the same signed distance field
 the terraces come from, and seeded by a constant so designer rebuilds do not reshuffle it.
-Every item stays inside the footprint, which the player cannot build on. The ripples are
-animated, so **a board with any lake redraws every frame**; the renderer's usual
-render-only-when-dirty skip does not apply to it. Snow caps are a material rule in
+Every item stays inside the footprint, which the player cannot build on. The water is
+deliberately static: animated ripples were tried and removed, because anything animated
+defeats the renderer's render-only-when-dirty skip and redraws every frame. Snow caps are a material rule in
 `ObstacleLayer.rockColor`, from `SNOW_MIN_LEVELS` terraces up.
 
 **Scenery** (trees, bushes, pebbles) is decoration only. `scenery.ts` plans it once per

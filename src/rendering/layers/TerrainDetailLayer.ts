@@ -27,7 +27,7 @@ const SHALLOW_OPACITY = 0.3;
 const DEEP_OPACITY = 0.62;
 
 /**
- * Detail on top of the terrain layers: the water surface with its ripples, and the pines,
+ * Detail on top of the terrain layers: the water surface, and the pines,
  * boulders, reeds, lily pads and rocks that sit on mountains and in lakes.
  *
  * Kept apart from `ObstacleLayer` and `LakeLayer`, which own the landform geometry and whose
@@ -39,14 +39,6 @@ const DEEP_OPACITY = 0.62;
 export class TerrainDetailLayer {
   private group: THREE.Group | null = null;
   private disposables: { dispose(): void }[] = [];
-  private readonly time = { value: 0 };
-  private water = false;
-
-  /** True when there is water to animate, i.e. when the renderer must keep redrawing. */
-  get hasWater(): boolean {
-    return this.water;
-  }
-
   build(
     scene: THREE.Scene,
     mountainCells: GridPos[],
@@ -65,7 +57,6 @@ export class TerrainDetailLayer {
     if (mountains) this.addMountainDecor(planMountainDecor(mountains.field, mountains.levels.length), foliage);
 
     const lakes = lakeCells.length > 0 ? buildTerrainContours(lakeCells, lakeTriangles) : null;
-    this.water = lakes !== null;
     if (lakes) {
       const water = new THREE.Color(waterColor);
       this.addWaterSurface(lakes.levels[0].polygons, lakes.levels[1]?.polygons ?? [], water);
@@ -75,15 +66,9 @@ export class TerrainDetailLayer {
     scene.add(this.group);
   }
 
-  /** Advance the ripples. `seconds` is any monotonic clock. */
-  tick(seconds: number): void {
-    this.time.value = seconds;
-  }
-
   dispose(scene: THREE.Scene): void {
     for (const d of this.disposables) d.dispose();
     this.disposables = [];
-    this.water = false;
     if (!this.group) return;
     scene.remove(this.group);
     this.group = null;
@@ -123,11 +108,11 @@ export class TerrainDetailLayer {
   }
 
   /**
-   * A glassy sheet with moving glints.
+   * A still, glassy sheet.
    *
-   * The glints are two drifting interference patterns of sines in world space, thresholded
-   * to thin crests. World space rather than UV so the pattern is continuous across both
-   * sheets and across separate lakes, and scale-stable at every zoom.
+   * Deliberately static. Animated ripple glints were tried and removed: animating anything
+   * forces the renderer to redraw every frame, bypassing its render-only-when-dirty skip,
+   * and the CPU cost of that was not worth a decorative effect.
    */
   private waterMaterial(color: THREE.Color, opacity: number): THREE.MeshStandardMaterial {
     const mat = this.track(new THREE.MeshStandardMaterial({
@@ -139,32 +124,6 @@ export class TerrainDetailLayer {
       depthWrite: false,
       side: THREE.DoubleSide,
     }));
-    const time = this.time;
-    mat.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = time;
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vRippleWorld;')
-        .replace(
-          '#include <project_vertex>',
-          '#include <project_vertex>\nvRippleWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
-        );
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying vec3 vRippleWorld;')
-        .replace('#include <tonemapping_fragment>', `
-          {
-            vec2 p = vRippleWorld.xz;
-            float a = sin(p.x * 0.23 + uTime * 1.3 + sin(p.y * 0.07 + uTime * 0.31) * 2.6)
-                    * sin(p.y * 0.29 - uTime * 1.1 + sin(p.x * 0.061 - uTime * 0.23) * 2.1);
-            float b = sin((p.x + p.y) * 0.17 - uTime * 0.8 + sin(p.x * 0.043) * 3.0)
-                    * sin((p.x - p.y) * 0.13 + uTime * 0.6 + sin(p.y * 0.05) * 2.0);
-            float glint = smoothstep(0.9, 0.99, a) * 0.8 + smoothstep(0.93, 0.995, b) * 0.6;
-            glint = clamp(glint, 0.0, 1.0);
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0), glint * 0.5);
-            gl_FragColor.a = max(gl_FragColor.a, glint * 0.6);
-          }
-          #include <tonemapping_fragment>`);
-    };
-    mat.customProgramCacheKey = () => 'tinytire-water-ripples';
     return mat;
   }
 
