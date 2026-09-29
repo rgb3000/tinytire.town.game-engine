@@ -141,6 +141,9 @@ export class DemoGame {
   }
 
   private render(alpha: number): void {
+    // The backdrop never pauses, so every tick moves something. The renderer no longer
+    // infers that from the presence of cars; see `Game.render`.
+    this.renderer.requestRender();
     this.renderer.render(
       alpha,
       this.spawnSystem.getHouses(),

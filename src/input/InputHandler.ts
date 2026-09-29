@@ -22,6 +22,16 @@ export class InputHandler {
 
   panningActive = false;
 
+  /**
+   * Bumped by every pointer event the canvas receives.
+   *
+   * The renderer draws only when something changed, and most of what a pointer changes —
+   * the highway and gas-station previews, the route overlay under the cursor while paused —
+   * is read from {@link state} by layers that raise no dirty flag of their own. Comparing
+   * this against the value seen last frame is how `Game` knows to ask for one.
+   */
+  version = 0;
+
   private canvas: HTMLCanvasElement;
   private screenToWorld: (sx: number, sy: number) => { x: number; z: number };
 
@@ -57,6 +67,7 @@ export class InputHandler {
   }
 
   private onMouseDown(e: MouseEvent): void {
+    this.version++;
     this.updatePosition(e);
     this.state.shiftDown = e.shiftKey;
     if (e.button === 0 && !this.panningActive) this.state.leftDown = true;
@@ -64,6 +75,7 @@ export class InputHandler {
   }
 
   private onMouseUp(e: MouseEvent): void {
+    this.version++;
     this.updatePosition(e);
     this.state.shiftDown = e.shiftKey;
     if (e.button === 0) this.state.leftDown = false;
@@ -71,11 +83,13 @@ export class InputHandler {
   }
 
   private onMouseMove(e: MouseEvent): void {
+    this.version++;
     this.updatePosition(e);
     this.state.shiftDown = e.shiftKey;
   }
 
   private onMouseLeave(): void {
+    this.version++;
     this.state.leftDown = false;
     this.state.rightDown = false;
     this.state.shiftDown = false;

@@ -92,12 +92,18 @@ export class Game {
   // State callback throttling — cache previous values to avoid redundant React updates
   private prevCallbackState: GameState = GameState.WaitingToStart;
   private prevCallbackScore = 0;
-  private prevCallbackTime = 0;
+  private prevCallbackSecond = 0;
+  private prevCallbackTimeScale = 1;
+  private prevCallbackDemandKey = '';
   private prevCallbackRoads = 0;
   private prevCallbackHighways = 0;
   private prevCallbackGasStations = 0;
   private prevCallbackWeek = 1;
   private prevCallbackWeekChoice = false;
+
+  // Render-on-demand bookkeeping: see `render()`.
+  private prevRenderState: GameState = GameState.WaitingToStart;
+  private prevInputVersion = 0;
 
   // Event listener references for cleanup
   private resizeHandler: () => void;
@@ -407,7 +413,15 @@ export class Game {
     };
   }
 
-  onStateUpdate(cb: (state: GameState, score: number, time: number, inventory: Inventory, demandStats: DemandStat[] | null, gameDay: number, timeScale: number, gameWeek: number, weekChoicePending: boolean, pendingChoiceOptions: WeeklyChoiceOption[]) => void): void {
+  /**
+   * Subscribe to HUD-level state. Single slot: a second call replaces the first.
+   *
+   * Fires on a rendered frame when any of its values has changed, with `time` counted in
+   * whole seconds — so while playing, expect about one call per second plus one for each
+   * score, demand, inventory or state change. Read {@link getElapsedTime} directly if
+   * something needs sub-second time.
+   */
+  onStateUpdate(cb:(state: GameState, score: number, time: number, inventory: Inventory, demandStats: DemandStat[] | null, gameDay: number, timeScale: number, gameWeek: number, weekChoicePending: boolean, pendingChoiceOptions: WeeklyChoiceOption[]) => void): void {
     this.stateCallback = cb;
   }
 
@@ -690,10 +704,25 @@ export class Game {
   }
 
   private render(alpha: number): void {
-    // Request render when game is playing (continuous animation) or waiting to start (show terrain)
-    if (this.state === GameState.Playing || this.state === GameState.WaitingToStart) {
+    // The renderer draws only when asked or dirty, so this is where "something moved" is
+    // decided. A running simulation moves something every tick: cars, demand pins, the
+    // delivery balls. Nothing else here changes the picture except the pointer, whose
+    // previews and hover overlays are read straight from input state, and a change of
+    // state — pausing, for one, snaps the cars from interpolated to settled positions.
+    // Everything else (edits, spawns, the camera) raises the renderer's own dirty flags.
+    //
+    // This used to request a frame unconditionally while playing *or* waiting to start,
+    // which, with the renderer also forcing one whenever any car existed, meant the title,
+    // pause, weekly-choice and game-over screens were all redrawn every frame.
+    if (
+      this.state === GameState.Playing ||
+      this.state !== this.prevRenderState ||
+      this.input.version !== this.prevInputVersion
+    ) {
       this.renderer.requestRender();
     }
+    this.prevRenderState = this.state;
+    this.prevInputVersion = this.input.version;
 
     this.renderer.updateIndicator(this.roadDrawer.getLastBuiltPos());
     this.renderer.updateGasStationPreview(this.gasStationPlacer.getPreviewCells());
@@ -711,55 +740,78 @@ export class Game {
       this.highwayDrawer.getPlacementState(),
       this.gasStationSystem.getGasStations(),
     );
-    // Counted in one pass per array rather than a `filter` per colour per frame:
-    // this runs on every rendered frame, and the filtering version walked the house
-    // and business lists four times for each unlocked colour.
+    this.notifyStateIfChanged();
+  }
+
+  /**
+   * Fire the state callback, but only when something a HUD would show has changed.
+   *
+   * Time counts in whole seconds. It used to be compared exactly, and since `elapsedTime`
+   * advances every tick, that made the "throttle" fire on every frame of play — a React
+   * re-render at frame rate for a clock that displays seconds. The whole-second heartbeat
+   * is also what refreshes the continuous figures in `demandStats` (the per-minute rates);
+   * pin counts, colours and building counts are compared directly, so a new or delivered
+   * pin still shows immediately.
+   */
+  private notifyStateIfChanged(): void {
+    if (!this.stateCallback) return;
+    const score = this.carSystem.getScore();
+    const second = Math.floor(this.elapsedTime);
+    const gameWeek = this.getGameWeek();
+    const weekChoicePending = this.economy.isWeekChoicePending();
+    const houses = this.spawnSystem.getHouses();
+    const businesses = this.spawnSystem.getBusinesses();
+    const unlockedColors = this.spawnSystem.getUnlockedColors();
+    const colorDemands = this.demandSystem.getColorDemands();
+    let demandKey = `${houses.length}/${businesses.length}`;
+    for (const color of unlockedColors) demandKey += `/${color}:${colorDemands.get(color) ?? 0}`;
+
+    if (
+      this.state === this.prevCallbackState &&
+      score === this.prevCallbackScore &&
+      second === this.prevCallbackSecond &&
+      this.timeScale === this.prevCallbackTimeScale &&
+      demandKey === this.prevCallbackDemandKey &&
+      this.inventory.roads === this.prevCallbackRoads &&
+      this.inventory.highways === this.prevCallbackHighways &&
+      this.inventory.gasStations === this.prevCallbackGasStations &&
+      gameWeek === this.prevCallbackWeek &&
+      weekChoicePending === this.prevCallbackWeekChoice
+    ) {
+      return;
+    }
+    this.prevCallbackState = this.state;
+    this.prevCallbackScore = score;
+    this.prevCallbackSecond = second;
+    this.prevCallbackTimeScale = this.timeScale;
+    this.prevCallbackDemandKey = demandKey;
+    this.prevCallbackRoads = this.inventory.roads;
+    this.prevCallbackHighways = this.inventory.highways;
+    this.prevCallbackGasStations = this.inventory.gasStations;
+    this.prevCallbackWeek = gameWeek;
+    this.prevCallbackWeekChoice = weekChoicePending;
+
+    // Counted in one pass per array rather than a `filter` per colour. Built only when the
+    // callback actually fires, not on every rendered frame as before.
     const houseCounts = new Map<GameColor, number>();
-    for (const house of this.spawnSystem.getHouses()) {
+    for (const house of houses) {
       houseCounts.set(house.color, (houseCounts.get(house.color) ?? 0) + 1);
     }
     const businessCounts = new Map<GameColor, number>();
-    for (const business of this.spawnSystem.getBusinesses()) {
+    for (const business of businesses) {
       businessCounts.set(business.color, (businessCounts.get(business.color) ?? 0) + 1);
     }
-    const colorDemands = this.demandSystem.getColorDemands();
-    const demandStats: DemandStat[] = this.spawnSystem.getUnlockedColors().map(color => {
-      const houses = houseCounts.get(color) ?? 0;
-      return {
-        color,
-        demand: colorDemands.get(color) ?? 0,
-        // The spawner's own figure, not a flat per-house rate: the two used to disagree,
-        // so the HUD reported a supply the simulation never believed.
-        supplyPerMin: this.spawnSystem.getColorSupplyRate(color),
-        demandPerMin: this.demandSystem.getColorPinOutputRate(color),
-        houses,
-        businesses: businessCounts.get(color) ?? 0,
-      };
-    });
-    // Only fire stateCallback when values actually change to avoid per-frame React re-renders
-    const score = this.carSystem.getScore();
-    const gameWeek = this.getGameWeek();
-    const weekChoicePending = this.economy.isWeekChoicePending();
-    if (this.stateCallback && (
-      this.state !== this.prevCallbackState ||
-      score !== this.prevCallbackScore ||
-      this.elapsedTime !== this.prevCallbackTime ||
-      this.inventory.roads !== this.prevCallbackRoads ||
-      this.inventory.highways !== this.prevCallbackHighways ||
-      this.inventory.gasStations !== this.prevCallbackGasStations ||
-      gameWeek !== this.prevCallbackWeek ||
-      weekChoicePending !== this.prevCallbackWeekChoice
-    )) {
-      this.prevCallbackState = this.state;
-      this.prevCallbackScore = score;
-      this.prevCallbackTime = this.elapsedTime;
-      this.prevCallbackRoads = this.inventory.roads;
-      this.prevCallbackHighways = this.inventory.highways;
-      this.prevCallbackGasStations = this.inventory.gasStations;
-      this.prevCallbackWeek = gameWeek;
-      this.prevCallbackWeekChoice = weekChoicePending;
-      this.stateCallback(this.state, score, this.elapsedTime, { ...this.inventory }, demandStats, this.getGameDay(), this.timeScale, gameWeek, weekChoicePending, this.economy.getPendingChoiceOptions());
-    }
+    const demandStats: DemandStat[] = unlockedColors.map(color => ({
+      color,
+      demand: colorDemands.get(color) ?? 0,
+      // The spawner's own figure, not a flat per-house rate: the two used to disagree,
+      // so the HUD reported a supply the simulation never believed.
+      supplyPerMin: this.spawnSystem.getColorSupplyRate(color),
+      demandPerMin: this.demandSystem.getColorPinOutputRate(color),
+      houses: houseCounts.get(color) ?? 0,
+      businesses: businessCounts.get(color) ?? 0,
+    }));
+    this.stateCallback(this.state, score, this.elapsedTime, { ...this.inventory }, demandStats, this.getGameDay(), this.timeScale, gameWeek, weekChoicePending, this.economy.getPendingChoiceOptions());
   }
 
   private onResize(): void {

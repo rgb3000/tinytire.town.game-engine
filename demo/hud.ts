@@ -43,10 +43,10 @@ function statChip(label: string): { node: HTMLElement; value: HTMLElement } {
 /**
  * The heads-up display: stats, demand, the tool dock and the utility cluster.
  *
- * Built once. `update()` only writes text and attributes onto retained nodes,
- * because `onStateUpdate` fires on every frame while the game is playing — its
- * throttle includes `elapsedTime`, which advances every tick — and rebuilding
- * this DOM sixty times a second is exactly what the old panel did.
+ * Built once. `update()` only writes text and attributes onto retained nodes.
+ * `onStateUpdate` now fires about once a second while playing, plus once per
+ * score, demand or inventory change, but it once fired on every frame, and
+ * rebuilding this DOM sixty times a second is exactly what the old panel did.
  */
 export function mountHud(game: Game, onRestart: () => void) {
   const statsHost = document.querySelector<HTMLElement>('#hud-stats')!;

@@ -29,12 +29,19 @@ import {
 import type { HighwaySystem } from '../systems/HighwaySystem';
 import type { HighwayPlacementState } from '../input/HighwayDrawer';
 import { Tool, CellType } from '../types';
+import { CarState } from '../entities/Car';
 import type { ColorTheme, MountainTriangles, LakeTriangles } from '../maps/types';
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
 const ZOOM_LERP = 0.25;
 const ZOOM_STEP = 0.05;
 const KEY_ZOOM_STEP = 0.08;
+/**
+ * The minimum gap between frames drawn *only* because a wall-clock pulse is running
+ * (see `render`). 30 ms rather than 33: the loop draws at most every ~16.7 ms, and a
+ * threshold at exactly two frames would, with timestamp jitter, often wait for a third.
+ */
+const AMBIENT_FRAME_INTERVAL_MS = 30;
 
 export class Renderer {
   protected scene: THREE.Scene;
@@ -82,6 +89,8 @@ export class Renderer {
   private prevCarCount = 0;
   private prevGasStationCount = 0;
   private hasPulsingEntities = false;
+  /** `performance.now()` of the last frame actually drawn. */
+  private lastDrawTime = -Infinity;
   private mountainColor: string | undefined;
   private waterColor: string | undefined;
   private shorelineColor: string | undefined;
@@ -454,7 +463,6 @@ export class Renderer {
       }
       return;
     }
-    this.needsRender = true;
 
     if (!this.indicatorMesh) {
       const geom = new THREE.RingGeometry(TILE_SIZE * 0.35, TILE_SIZE * 0.42, 32);
@@ -470,12 +478,16 @@ export class Renderer {
       this.scene.add(this.indicatorMesh);
     }
 
-    this.indicatorMesh.position.set(
-      (pos.gx + 0.5) * TILE_SIZE,
-      1.5,
-      (pos.gy + 0.5) * TILE_SIZE,
-    );
+    // Only a move or a reappearance is a change. The last-built position outlives the
+    // gesture that set it, so asking for a frame unconditionally here kept the renderer
+    // drawing every frame for the rest of the game once a single road had been placed.
+    const x = (pos.gx + 0.5) * TILE_SIZE;
+    const z = (pos.gy + 0.5) * TILE_SIZE;
+    const p = this.indicatorMesh.position;
+    if (this.indicatorMesh.visible && p.x === x && p.z === z) return;
+    p.set(x, 1.5, z);
     this.indicatorMesh.visible = true;
+    this.needsRender = true;
   }
 
   updateGasStationPreview(cells: GridPos[] | null): void {
@@ -496,17 +508,21 @@ export class Renderer {
     }
 
     if (!cells) {
-      for (const mesh of this.gasStationPreviewMeshes) mesh.visible = false;
+      for (const mesh of this.gasStationPreviewMeshes) {
+        if (!mesh.visible) continue;
+        mesh.visible = false;
+        this.needsRender = true;
+      }
       return;
     }
 
     const mesh = this.gasStationPreviewMeshes[0];
-    mesh.position.set(
-      (cells[0].gx + 0.5) * TILE_SIZE,
-      1.5,
-      (cells[0].gy + 0.5) * TILE_SIZE,
-    );
+    const x = (cells[0].gx + 0.5) * TILE_SIZE;
+    const z = (cells[0].gy + 0.5) * TILE_SIZE;
+    if (mesh.visible && mesh.position.x === x && mesh.position.z === z) return;
+    mesh.position.set(x, 1.5, z);
     mesh.visible = true;
+    this.needsRender = true;
   }
 
   applyColorTheme(theme: ColorTheme): void {
@@ -660,13 +676,25 @@ export class Renderer {
       this.prevGasStationCount = gsCount;
     }
 
-    // Cars moving or pulsing entities always need render
-    if (carCount > 0) this.needsRender = true;
-
-    // Check for pulsing demand pins (businesses near max demand) or spinning connectors
+    // Moving cars are *not* a reason to draw here. Cars move only when the simulation
+    // advances, and whoever advances it says so through `requestRender()`. This used to
+    // read `carCount > 0`, which counted parked cars too, so every paused, game-over and
+    // weekly-choice screen was redrawn at the display's full refresh rate, indefinitely.
+    //
+    // What remains are the animations that run on wall-clock time and keep moving
+    // whether or not the simulation does: near-full demand pins, unconnected
+    // connectors and stranded cars all pulse.
+    //
+    // They are slow — a second or more per cycle — so on their own they are drawn at
+    // `AMBIENT_FRAME_INTERVAL_MS`, not at full rate. Early in a game some business is
+    // almost always unconnected, and its pulse alone kept the title and pause screens at
+    // 60 fps.
     this.hasPulsingEntities = businesses.some(b => b.demandPins >= MAX_DEMAND_PINS - 2);
-    if (this.hasPulsingEntities) this.needsRender = true;
-    if (businesses.some(b => !b.connected)) this.needsRender = true;
+    const ambient = this.hasPulsingEntities ||
+      businesses.some(b => !b.connected) ||
+      cars.some(c => c.state === CarState.Stranded);
+    const now = performance.now();
+    if (ambient && now - this.lastDrawTime >= AMBIENT_FRAME_INTERVAL_MS) this.needsRender = true;
 
     // Update ground texture if dirty (terrain only)
     if (this.groundDirty) {
@@ -683,6 +711,9 @@ export class Renderer {
         setTimeout(() => {
           this.roadLayer.update(this.scene);
           this.roadRebuildScheduled = false;
+          // The frame that marked the ground dirty has already been drawn without these
+          // meshes. Nothing else guarantees another one follows.
+          this.needsRender = true;
         }, 0);
       }
       this.groundDirty = false;
@@ -698,6 +729,8 @@ export class Renderer {
       this.highwayLayer.update(this.scene, highwaySystem, activeTool, highwayPlacementState);
       this.highwayDirty = false;
     }
+    // Picking or leaving the Highway tool shows or hides the edit handles.
+    if (toolChanged) this.needsRender = true;
     this.prevActiveTool = activeTool;
 
     // Update 3D meshes
@@ -716,6 +749,7 @@ export class Renderer {
     if (this.needsRender && !this.isCapturing) {
       this.webglRenderer.render(this.scene, this.camera);
       this.needsRender = false;
+      this.lastDrawTime = now;
     }
   }
 
