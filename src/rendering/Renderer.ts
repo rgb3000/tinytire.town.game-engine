@@ -18,6 +18,7 @@ import { RoadDebugLayer } from './layers/RoadDebugLayer';
 import { CarRouteLayer } from './layers/CarRouteLayer';
 import type { TrafficAdapter } from '../systems/car/TrafficAdapter';
 import { HighwayLayer } from './layers/HighwayLayer';
+import { SceneryLayer } from './layers/SceneryLayer';
 import { createBackdropPlane } from './backdrop';
 import {
   poseFor, stepPose, poseSettled, positionFor,
@@ -26,7 +27,7 @@ import {
 } from './cameraPose';
 import type { HighwaySystem } from '../systems/HighwaySystem';
 import type { HighwayPlacementState } from '../input/HighwayDrawer';
-import { Tool } from '../types';
+import { Tool, CellType } from '../types';
 import type { ColorTheme, MountainTriangles, LakeTriangles } from '../maps/types';
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
@@ -50,6 +51,9 @@ export class Renderer {
   private carRouteLayer: CarRouteLayer;
   private trafficAdapter: TrafficAdapter | null;
   private highwayLayer: HighwayLayer;
+  private sceneryLayer: SceneryLayer;
+  /** Cells a highway passes over, as `gy * GRID_COLS + gx`. Scenery is cleared under them. */
+  private highwayCells = new Set<number>();
   private grid: Grid;
   private lakeCells: GridPos[] = [];
   private lakeTris: LakeTriangles | undefined;
@@ -139,14 +143,16 @@ export class Renderer {
     this.updateFrustum();
     this.updateCameraPosition();
 
-    // Lighting
-    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
-    this.scene.add(ambient);
+    // Lighting. A hemisphere light rather than a flat ambient: surfaces facing up take a
+    // warm sky tint and surfaces facing sideways pick up a green bounce from the grass, so
+    // shadowed sides read as coloured rather than grey. The sun is a touch warm to match.
+    const hemi = new THREE.HemisphereLight(0xfff4e0, 0x9aa878, 1.0);
+    this.scene.add(hemi);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
+    const dirLight = new THREE.DirectionalLight(0xfff0da, 1.7);
     dirLight.position.set(
       CANVAS_WIDTH / 2 - 800,
-      600,
+      1100,
       CANVAS_HEIGHT / 2 + 1200,
     );
     dirLight.target.position.set(CANVAS_WIDTH / 2, 0, CANVAS_HEIGHT / 2);
@@ -183,7 +189,11 @@ export class Renderer {
     this.roadDebugLayer = new RoadDebugLayer();
     this.carRouteLayer = new CarRouteLayer();
     this.highwayLayer = new HighwayLayer();
+    // A fresh layout per renderer, i.e. per game. The seed is a *decoration* seed: nothing
+    // about gameplay reads it, and it is not part of the map format.
+    this.sceneryLayer = new SceneryLayer(this.scene, Math.floor(Math.random() * 0x7fffffff));
     this.grid = grid;
+    this.refreshScenery();
 
     // Render initial ground state (terrain only, roads are 3D)
     this.offCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -195,6 +205,9 @@ export class Renderer {
     this.groundTexture = new THREE.CanvasTexture(this.offscreenCanvas);
     this.groundTexture.minFilter = THREE.LinearFilter;
     this.groundTexture.magFilter = THREE.LinearFilter;
+    // The canvas is painted in sRGB hex colours. Left at the default (linear), three.js
+    // encodes them to sRGB a second time on output, which lifts and greys every ground colour.
+    this.groundTexture.colorSpace = THREE.SRGBColorSpace;
 
     const groundMat = new THREE.MeshStandardMaterial({ map: this.groundTexture, roughness: 0.85, alphaTest: 0.5 });
     const groundGeom = new THREE.PlaneGeometry(CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -410,6 +423,23 @@ export class Renderer {
     this.markGroundDirty();
   }
 
+  /** Re-derive which scenery still stands, from the grid and the highway corridors. */
+  private refreshScenery(): void {
+    this.sceneryLayer.refresh((gx, gy) => {
+      if (this.highwayCells.has(gy * GRID_COLS + gx)) return false;
+      return this.grid.getCell(gx, gy)?.type === CellType.Empty;
+    });
+  }
+
+  private collectHighwayCells(highwaySystem: HighwaySystem): void {
+    this.highwayCells.clear();
+    for (const hw of highwaySystem.getAll()) {
+      for (const p of hw.polyline) {
+        this.highwayCells.add(Math.floor(p.y / TILE_SIZE) * GRID_COLS + Math.floor(p.x / TILE_SIZE));
+      }
+    }
+  }
+
   updateIndicator(pos: GridPos | null): void {
     if (!pos) {
       if (this.indicatorMesh && this.indicatorMesh.visible) {
@@ -485,9 +515,12 @@ export class Renderer {
     }
     // Terrain background
     this.terrainLayer.setBackgroundColor(theme.background);
-    (this.bgPlaneMesh.material as THREE.MeshBasicMaterial).color.set(theme.background);
+    (this.bgPlaneMesh.material as THREE.MeshStandardMaterial).color.set(theme.background);
     // Lake colors
     this.terrainLayer.setLakeColors(theme.waterColor);
+    this.terrainLayer.setShoreColor(theme.shorelineColor);
+    // Scenery
+    this.sceneryLayer.setFoliageColor(theme.foliage);
     // Road surface
     this.roadLayer.setRoadColor(theme.road);
     // Highway surface
@@ -633,6 +666,9 @@ export class Renderer {
       this.offCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       this.terrainLayer.render(this.offCtx, this.lakeCells, this.backgroundTiles, this.paintPalette, this.lakeTris);
       this.groundTexture.needsUpdate = true;
+      // Every ground-dirty source — a road edit, a spawn, a gas station, a terrain rebuild —
+      // is also a change to which cells are free, so this is where scenery gets cleared.
+      this.refreshScenery();
 
       // Defer road mesh rebuild to next frame to avoid frame hitch
       if (!this.roadRebuildScheduled) {
@@ -648,6 +684,10 @@ export class Renderer {
     // Update highway layer when dirty, tool is Highway, or tool just changed away from Highway
     const toolChanged = activeTool !== this.prevActiveTool;
     if (highwaySystem && (this.highwayDirty || activeTool === Tool.Highway || (toolChanged && this.prevActiveTool === Tool.Highway))) {
+      if (this.highwayDirty) {
+        this.collectHighwayCells(highwaySystem);
+        this.refreshScenery();
+      }
       this.highwayLayer.update(this.scene, highwaySystem, activeTool, highwayPlacementState);
       this.highwayDirty = false;
     }
@@ -760,6 +800,7 @@ export class Renderer {
     this.highwayLayer.dispose(this.scene);
     this.obstacleLayer.dispose(this.scene);
     this.lakeLayer.dispose(this.scene);
+    this.sceneryLayer.dispose(this.scene);
     if (this.indicatorMesh) {
       this.scene.remove(this.indicatorMesh);
       this.indicatorMesh.geometry.dispose();

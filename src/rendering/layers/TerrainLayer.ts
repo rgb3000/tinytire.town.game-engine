@@ -2,6 +2,7 @@ import type { GridPos } from '../../types';
 import type { LakeTriangles } from '../../maps/types';
 import { GRID_COLS, GRID_ROWS, TILE_SIZE, LAKE_SHORE_COLOR } from '../../constants';
 import { buildTerrainContours } from '../../terrain';
+import { mulberry32 } from '../../utils/rng';
 
 /**
  * Every loop of a lake's footprint, in world pixels: outer boundaries and island holes alike.
@@ -44,12 +45,78 @@ function addLoop(path: Path2D, loop: number[][]): void {
   path.closePath();
 }
 
+/** World-pixel width of the sand band painted around every lake, measured from the shore. */
+const BEACH_WIDTH = 7;
+
+/** How far the beach is lifted from the theme's shoreline colour toward white. */
+const BEACH_LIGHTEN = 0.45;
+
+/** Resolution of the baked ground detail, relative to world pixels. It is all soft shapes. */
+const DETAIL_RESOLUTION = 0.5;
+
+/**
+ * Soft patches and specks that break up the flat ground colour, baked once.
+ *
+ * Drawn in translucent white and dark green rather than in the ground colour, so one bake
+ * suits every theme and survives `setBackgroundColor`. Seeded, so repainting the ground on a
+ * road edit reproduces it exactly — random patches would visibly reshuffle on every edit.
+ */
+function bakeGroundDetail(w: number, h: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(w * DETAIL_RESOLUTION);
+  canvas.height = Math.ceil(h * DETAIL_RESOLUTION);
+  const ctx = canvas.getContext('2d')!;
+  ctx.scale(DETAIL_RESOLUTION, DETAIL_RESOLUTION);
+  const rand = mulberry32(0x6e7a55);
+
+  const blob = (count: number, minR: number, maxR: number, rgb: string, alpha: number): void => {
+    for (let i = 0; i < count; i++) {
+      const x = rand() * w;
+      const y = rand() * h;
+      const r = minR + rand() * (maxR - minR);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `rgba(${rgb},${alpha * (0.5 + rand() * 0.5)})`);
+      g.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+  };
+  blob(70, 120, 320, '70,110,40', 0.09);
+  blob(60, 90, 240, '255,255,240', 0.16);
+  blob(160, 30, 80, '70,110,40', 0.07);
+
+  for (let i = 0; i < 3500; i++) {
+    ctx.fillStyle = rand() < 0.6 ? 'rgba(70,110,40,0.16)' : 'rgba(255,255,240,0.3)';
+    ctx.beginPath();
+    ctx.arc(rand() * w, rand() * h, 0.8 + rand() * 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  return canvas;
+}
+
+function mixHex(a: string, b: string, t: number): string {
+  const parse = (hex: string): number[] => {
+    const v = hex.replace('#', '');
+    const full = v.length === 3 ? v.split('').map(c => c + c).join('') : v;
+    return [0, 2, 4].map(i => parseInt(full.slice(i, i + 2), 16));
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  return `rgb(${pa.map((c, i) => Math.round(c + (pb[i] - c) * t)).join(',')})`;
+}
+
 export class TerrainLayer {
   private backgroundColor = '#FFFFFF';
   private waterColor = LAKE_SHORE_COLOR;
+  private beachColor = mixHex(LAKE_SHORE_COLOR, '#FFFFFF', BEACH_LIGHTEN);
+  private groundDetail: HTMLCanvasElement | null = null;
 
   setBackgroundColor(color: string): void {
     this.backgroundColor = color;
+  }
+
+  setShoreColor(color: string): void {
+    this.beachColor = mixHex(color, '#FFFFFF', BEACH_LIGHTEN);
   }
 
   setLakeColors(water: string): void {
@@ -68,6 +135,9 @@ export class TerrainLayer {
 
     ctx.fillStyle = this.backgroundColor;
     ctx.fillRect(0, 0, w, h);
+
+    this.groundDetail ??= bakeGroundDetail(w, h);
+    ctx.drawImage(this.groundDetail, 0, 0, w, h);
 
     // Paint background tiles (before lakes so lakes overlay on top)
     if (backgroundTiles && paintPalette && backgroundTiles.size > 0) {
@@ -109,6 +179,20 @@ export class TerrainLayer {
       if (loops.length > 0) {
         const path = new Path2D();
         for (const loop of loops) addLoop(path, loop);
+
+        // Sand around the shore. Stroked centred on the footprint, so the inner half is
+        // punched away with the water below and only the outer half is ever seen.
+        ctx.save();
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = this.beachColor;
+        ctx.globalAlpha = 0.45;
+        ctx.lineWidth = BEACH_WIDTH * 2 + 6;
+        ctx.stroke(path);
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = BEACH_WIDTH * 2;
+        ctx.stroke(path);
+        ctx.restore();
 
         // Soft inner outline in the water colour, matching the mesh silhouette exactly.
         ctx.save();

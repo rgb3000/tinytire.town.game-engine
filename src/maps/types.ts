@@ -179,6 +179,8 @@ export interface ColorTheme {
   waterColor: string;
   shorelineColor: string;
   mountainShorelineColor: string;
+  /** Base colour of decorative trees and bushes; each item varies around it. */
+  foliage: string;
   gameColors: Record<number, string>;
   paintPalette: PaintPalette;
 }

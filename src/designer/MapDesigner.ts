@@ -446,7 +446,7 @@ export class MapDesigner {
     }
   }
 
-  updateThemeField(key: 'background' | 'road' | 'highway' | 'gridLines' | 'groundPlate' | 'mountainColor' | 'waterColor' | 'shorelineColor' | 'mountainShorelineColor', value: string): void {
+  updateThemeField(key: 'background' | 'road' | 'highway' | 'gridLines' | 'groundPlate' | 'mountainColor' | 'waterColor' | 'shorelineColor' | 'mountainShorelineColor' | 'foliage', value: string): void {
     this.colorTheme[key] = value;
     this.renderer.applyColorTheme(this.colorTheme);
     if (key === 'mountainColor' || key === 'waterColor' || key === 'shorelineColor' || key === 'mountainShorelineColor') {

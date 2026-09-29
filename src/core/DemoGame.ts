@@ -54,6 +54,8 @@ export class DemoGame {
       () => this.spawnSystem.getBusinesses(),
       this.carSystem.getTrafficAdapter(),
     );
+    // Before the terrain build, for the reason given in `Game.buildWorld`.
+    this.renderer.applyColorTheme(buildColorTheme(mapConfig.colorTheme));
     this.renderer.rebuildTerrain(
       this.obstacleSystem.getMountainCells(),
       this.obstacleSystem.getLakeCells(),
@@ -65,9 +67,6 @@ export class DemoGame {
         backgroundTilesToMap(mapConfig.backgroundTiles),
         [...mapConfig.paintPalette],
       );
-    }
-    if (mapConfig.colorTheme) {
-      this.renderer.applyColorTheme(buildColorTheme(mapConfig.colorTheme));
     }
     this.renderer.resize(window.innerWidth, window.innerHeight);
 

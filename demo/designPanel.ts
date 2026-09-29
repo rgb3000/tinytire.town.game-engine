@@ -30,7 +30,7 @@ const COLORS: [GameColor, string][] = [
   [GameColor.Orange, 'Orange'],
 ];
 
-const THEME_FIELDS: ['background' | 'road' | 'highway' | 'gridLines' | 'groundPlate' | 'mountainColor' | 'waterColor', string][] = [
+const THEME_FIELDS: ['background' | 'road' | 'highway' | 'gridLines' | 'groundPlate' | 'mountainColor' | 'waterColor' | 'foliage', string][] = [
   ['background', 'Background'],
   ['groundPlate', 'Ground'],
   ['road', 'Road'],
@@ -38,6 +38,7 @@ const THEME_FIELDS: ['background' | 'road' | 'highway' | 'gridLines' | 'groundPl
   ['gridLines', 'Grid'],
   ['mountainColor', 'Mountain'],
   ['waterColor', 'Water'],
+  ['foliage', 'Trees'],
 ];
 
 /**

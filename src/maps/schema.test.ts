@@ -108,14 +108,15 @@ describe('colour theme', () => {
     }
   });
 
-  it('covers all nine documented theme colours', () => {
+  it('covers all ten documented theme colours', () => {
     // Guards against someone adding a colour to ColorTheme but not to the defaults,
     // which is what the schema derives its key list from.
-    expect(THEME_COLOR_KEYS).toHaveLength(9);
+    expect(THEME_COLOR_KEYS).toHaveLength(10);
     expect(THEME_COLOR_KEYS).toContain('mountainColor');
     expect(THEME_COLOR_KEYS).toContain('waterColor');
     expect(THEME_COLOR_KEYS).toContain('shorelineColor');
     expect(THEME_COLOR_KEYS).toContain('mountainShorelineColor');
+    expect(THEME_COLOR_KEYS).toContain('foliage');
   });
 
   it('translates game colours between enum keys and names', () => {

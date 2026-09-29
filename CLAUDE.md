@@ -225,7 +225,19 @@ so the whole pipeline is exercised directly by the Node-only suite.
 ### Rendering (`src/rendering/`)
 
 Three.js with orthographic top-down camera. Layers: TerrainLayer, RoadLayer, BuildingLayer,
-CarLayer, HighwayLayer.
+CarLayer, HighwayLayer, SceneryLayer.
+
+**Scenery** (trees, bushes, pebbles) is decoration only. `scenery.ts` plans it once per
+renderer from a random seed — pure, Node-tested — and `SceneryLayer` only toggles visibility
+afterwards: an item shows while its cell is `CellType.Empty` and no highway passes over it.
+The refresh piggybacks on `markGroundDirty`, which every cell-changing edit already raises,
+so building clears the land and erasing lets it grow back. Its colour is the theme's
+`foliage` key.
+
+The ground texture is a `CanvasTexture` painted in sRGB hex colours, so it must carry
+`colorSpace = SRGBColorSpace`; without it the ground is encoded twice and washes out to grey.
+`Game` and `DemoGame` apply the resolved colour theme — defaults included — *before*
+`rebuildTerrain`, because terrain colours are baked into materials at build time.
 
 ### Input (`src/input/`)
 

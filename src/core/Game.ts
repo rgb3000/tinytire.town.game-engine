@@ -197,15 +197,17 @@ export class Game {
     this.carSystem = new CarSystem(this.pathfinder, this.grid, this.pendingDeletionSystem, this.cfg, this.highwaySystem, this.gasStationSystem);
 
     this.renderer = new Renderer(this.webglRenderer, this.grid, () => this.spawnSystem.getHouses(), () => this.spawnSystem.getBusinesses(), this.carSystem.getTrafficAdapter());
+    // Always, and before the terrain build. A map with no theme of its own still means the
+    // default theme — skipping this left the renderer on its hard-coded fallbacks — and
+    // terrain colours are baked into materials at build time, so a theme applied after
+    // `rebuildTerrain` would miss the map's mountain and water colours.
+    this.renderer.applyColorTheme(buildColorTheme(this.mapConfig?.colorTheme));
     this.renderer.rebuildTerrain(this.obstacleSystem.getMountainCells(), this.obstacleSystem.getLakeCells(), this.obstacleSystem.getMountainTriangles(), this.obstacleSystem.getLakeTriangles());
     if (this.mapConfig?.backgroundTiles && this.mapConfig.paintPalette) {
       this.renderer.setBackgroundTiles(
         backgroundTilesToMap(this.mapConfig.backgroundTiles),
         [...this.mapConfig.paintPalette],
       );
-    }
-    if (this.mapConfig?.colorTheme) {
-      this.renderer.applyColorTheme(buildColorTheme(this.mapConfig.colorTheme));
     }
     this.renderer.resize(window.innerWidth, window.innerHeight);
 

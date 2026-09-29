@@ -20,6 +20,11 @@ export const BACKDROP_RENDER_ORDER = -1;
  * the lake bed. Instead it writes no depth and draws first, so each opaque mesh that follows
  * overwrites it no matter which is nearer the camera.
  *
+ * It is lit like the ground plane — same material family, same roughness — so the land
+ * beyond the map's edge reads as more of the same ground rather than as a differently
+ * coloured surround. An unlit backdrop skips the lighting and tone response the ground gets,
+ * and the board then sits in a visibly mismatched frame.
+ *
  * `depthTest` is deliberately left on. In the normal path it decides nothing — the depth
  * buffer is empty when this draws — but it is the safety net if anything ever sorts ahead of
  * the backdrop: a depth-tested plane still loses to nearer geometry that has already written
@@ -29,7 +34,7 @@ export function createBackdropPlane(size: number, color: THREE.ColorRepresentati
   const geometry = new THREE.PlaneGeometry(size, size);
   geometry.rotateX(-Math.PI / 2);
 
-  const material = new THREE.MeshBasicMaterial({ color, depthWrite: false });
+  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.85, depthWrite: false });
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = BACKDROP_RENDER_ORDER;

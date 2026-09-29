@@ -33,7 +33,7 @@ describe('createBackdropPlane', () => {
   const backdrop = () => createBackdropPlane(100, '#FFFFFF');
 
   it('writes no depth, so opaque geometry drawn after it always paints over it', () => {
-    const material = backdrop().material as THREE.MeshBasicMaterial;
+    const material = backdrop().material as THREE.MeshStandardMaterial;
     expect(material.depthWrite).toBe(false);
   });
 
@@ -41,7 +41,7 @@ describe('createBackdropPlane', () => {
     // With `depthWrite` off, draw order is what keeps the backdrop behind the scene.
     // `depthTest: false` would remove the only other line of defence and let a mis-sorted
     // backdrop paint over the entire map, so the default must stay on.
-    const material = backdrop().material as THREE.MeshBasicMaterial;
+    const material = backdrop().material as THREE.MeshStandardMaterial;
     expect(material.depthTest).toBe(true);
   });
 

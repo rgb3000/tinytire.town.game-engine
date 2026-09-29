@@ -1,8 +1,8 @@
-import { COLOR_MAP } from '../constants';
+import { COLOR_MAP, FOLIAGE_COLOR } from '../constants';
 import type { ColorTheme } from '../maps/types';
 
 export const DEFAULT_COLOR_THEME: ColorTheme = {
-  background: '#FFFFFF',
+  background: '#E6EBD5',
   groundPlate: '#FFFFFF',
   road: '#555555',
   highway: '#8899AA',
@@ -11,6 +11,7 @@ export const DEFAULT_COLOR_THEME: ColorTheme = {
   waterColor: '#7ABFCF',
   shorelineColor: '#C4B896',
   mountainShorelineColor: '#887E69',
+  foliage: FOLIAGE_COLOR,
   gameColors: { ...COLOR_MAP },
   paintPalette: ['#8BC34A', '#4FC3F7', '#FFD54F', '#EF9A9A', '#CE93D8'],
 };
