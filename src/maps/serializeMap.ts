@@ -124,6 +124,9 @@ export function toMapFile(config: MapConfig): MapFile {
     file.backgroundTiles = config.backgroundTiles.map(fromBackgroundTile);
     if (config.paintPalette) file.paintPalette = [...config.paintPalette];
   }
+  // Unlike `obstacles`, absent and `[]` mean the same here — no forest, no trees — so the
+  // usual omission of empty collections applies.
+  if (config.forests?.length) file.forests = config.forests.map((f) => ({ gx: f.gx, gy: f.gy }));
   if (config.colorTheme) {
     const theme = fromColorTheme(config.colorTheme);
     if (Object.keys(theme).length > 0) file.colorTheme = theme;

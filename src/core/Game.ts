@@ -215,6 +215,7 @@ export class Game {
         [...this.mapConfig.paintPalette],
       );
     }
+    if (this.mapConfig?.forests) this.renderer.setForest(this.mapConfig.forests);
     this.renderer.resize(window.innerWidth, window.innerHeight);
 
     this.undoSystem = new UndoSystem(this.grid);

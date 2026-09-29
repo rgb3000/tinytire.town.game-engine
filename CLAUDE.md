@@ -253,9 +253,15 @@ reach `shadowsDirty`, through `markGroundDirty`/`markHighwayDirty` or a layer's
 `update()` return value as `BuildingLayer` does. Otherwise its shadow stays where it was
 last drawn.
 
-**Scenery** (trees, bushes, pebbles) is decoration only. `scenery.ts` plans it once per
-renderer from a random seed — pure, Node-tested — and `SceneryLayer` only toggles visibility
-afterwards: an item shows while its cell is `CellType.Empty` and no highway passes over it.
+**Scenery** (trees, bushes, pebbles) is decoration only. Trees grow only in the map's painted
+forest (`MapConfig.forests`, the designer's Forest tool); outside it there is nothing but the
+odd bush and pebble, so a map without `forests` has no trees. `scenery.ts` plans it — pure,
+Node-tested — from a constant seed, so a map looks the same in the designer, in play and on
+the backdrop. Each cell draws from its own generator and reads only its eight neighbours, so
+painting one cell changes that cell and its ring and nothing else; a single shared generator
+would reshuffle the whole map on every brush stroke. The plan is remade only by
+`Renderer.setForest`. Otherwise `SceneryLayer` only toggles visibility: an item shows while
+its cell is `CellType.Empty` and no highway passes over it.
 The refresh piggybacks on `markGroundDirty`, which every cell-changing edit already raises,
 so building clears the land and erasing lets it grow back. Its colour is the theme's
 `foliage` key.

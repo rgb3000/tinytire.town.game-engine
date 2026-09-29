@@ -93,6 +93,7 @@ export function mapFileToConfig(file: MapFile): MapConfig {
   if (file.highways) config.highways = file.highways.map((h) => ({ ...h }));
   if (file.backgroundTiles) config.backgroundTiles = file.backgroundTiles.map(toBackgroundTile);
   if (file.paintPalette) config.paintPalette = [...file.paintPalette] as PaintPalette;
+  if (file.forests) config.forests = file.forests.map((f) => ({ gx: f.gx, gy: f.gy }));
   if (file.colorTheme) config.colorTheme = toColorTheme(file.colorTheme);
   // Same reasoning as `toColorTheme`: `buildConfig` spreads these over
   // `DEFAULT_GAME_CONSTANTS`, and an undefined override would reach engine arithmetic.

@@ -20,7 +20,7 @@ import { serializeMapConfig } from '../maps/serializeMap';
 import { applyMapConfig } from '../core/applyMapConfig';
 import { flushWorldDirty, updateConnectorStatus } from '../core/worldFrame';
 import { omitUndefined } from '../utils/omitUndefined';
-import type { MapConfig, ObstacleDefinition, PaintPalette, BackgroundTileDefinition, ColorTheme, GameConstants, MountainTriangles, LakeTriangles } from '../maps/types';
+import type { MapConfig, ObstacleDefinition, PaintPalette, BackgroundTileDefinition, ForestCellDefinition, ColorTheme, GameConstants, MountainTriangles, LakeTriangles } from '../maps/types';
 import { buildColorTheme, diffColorTheme } from './colorTheme';
 export const DesignerTool = {
   Road: 0,
@@ -33,6 +33,7 @@ export const DesignerTool = {
   Paint: 7,
   Lake: 8,
   Blueprint: 9,
+  Forest: 10,
 } as const;
 export type DesignerTool = (typeof DesignerTool)[keyof typeof DesignerTool];
 
@@ -93,6 +94,13 @@ export class MapDesigner {
   backgroundTiles: Map<string, { top?: number; right?: number; bottom?: number; left?: number }> = new Map();
   colorTheme: ColorTheme = buildColorTheme();
   activePaintSlot = 0;
+
+  /**
+   * Painted forest, keyed `"gx,gy"`. Like paint, it lives outside the Grid: a forest cell
+   * is still `Empty`, and roads and buildings may go on it — its trees just stay hidden
+   * there, as they do when the player builds on forest in play.
+   */
+  forestCells: Set<string> = new Set();
 
   // Constants overrides (user-facing gameplay settings)
   constantsOverrides: Partial<GameConstants> = {};
@@ -320,17 +328,45 @@ export class MapDesigner {
   }
 
   /**
-   * Paint or raise terrain under the pointer, for the three tools that work on a continuous
-   * surface rather than a grid cell. One helper because the screen-to-world-then-branch
-   * dance was written out four times across the old mousedown and mousemove handlers.
+   * Paint, plant or raise terrain under the pointer, for the tools that brush over the map
+   * while dragging rather than placing one thing. One helper because the
+   * screen-to-world-then-branch dance was written out four times across the old mousedown
+   * and mousemove handlers.
    */
   private brushAt(e: MouseEvent): void {
     if (this.activeTool !== DesignerTool.Mountain
      && this.activeTool !== DesignerTool.Lake
-     && this.activeTool !== DesignerTool.Paint) return;
+     && this.activeTool !== DesignerTool.Paint
+     && this.activeTool !== DesignerTool.Forest) return;
     const world = this.renderer.screenToWorld(e.clientX, e.clientY);
     if (this.activeTool === DesignerTool.Paint) this.paintAt(world.x, world.z);
+    else if (this.activeTool === DesignerTool.Forest) this.forestAt(world.x, world.z);
     else this.placeObstacleAt(world.x, world.z);
+  }
+
+  /** Paint the cell under a world position as forest. */
+  forestAt(worldX: number, worldZ: number): void {
+    const gx = Math.floor(worldX / TILE_SIZE);
+    const gy = Math.floor(worldZ / TILE_SIZE);
+    if (gx < 0 || gx >= this.grid.cols || gy < 0 || gy >= this.grid.rows) return;
+    const key = `${gx},${gy}`;
+    // A drag reports the same cell many times over; replan only when something changed.
+    if (this.forestCells.has(key)) return;
+    this.forestCells.add(key);
+    this.syncForest();
+  }
+
+  private forestList(): ForestCellDefinition[] {
+    return [...this.forestCells]
+      .map((key) => {
+        const [gx, gy] = key.split(',').map(Number) as [number, number];
+        return { gx, gy };
+      })
+      .sort((a, b) => a.gy - b.gy || a.gx - b.gx);
+  }
+
+  private syncForest(): void {
+    this.renderer.setForest(this.forestList());
   }
 
   placeHouse(gx: number, gy: number): void {
@@ -511,6 +547,9 @@ export class MapDesigner {
       this.renderer.setBackgroundTiles(this.backgroundTiles, this.colorTheme.paintPalette);
       this.renderer.markGroundDirty();
     }
+
+    // Erase forest
+    if (this.forestCells.delete(key)) this.syncForest();
 
     const cell = this.grid.getCell(gx, gy);
     if (!cell) return;
@@ -795,6 +834,7 @@ export class MapDesigner {
       config.paintPalette = this.colorTheme.paintPalette as PaintPalette;
       config.backgroundTiles = bgTiles;
     }
+    if (this.forestCells.size > 0) config.forests = this.forestList();
 
     const colorTheme = diffColorTheme(this.colorTheme);
     if (colorTheme !== undefined) config.colorTheme = colorTheme;
@@ -859,6 +899,10 @@ export class MapDesigner {
       }
       this.renderer.setBackgroundTiles(this.backgroundTiles, this.colorTheme.paintPalette);
     }
+
+    // Replaced rather than merged: a map without forest has no trees, and should show none.
+    this.forestCells = new Set((config.forests ?? []).map((f) => `${f.gx},${f.gy}`));
+    this.syncForest();
 
     if (config.constants) {
       this.constantsOverrides = stripLegacyConstants(config.constants);

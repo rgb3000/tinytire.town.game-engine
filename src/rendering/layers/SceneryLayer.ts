@@ -14,6 +14,10 @@ const BUSH_SHIFT = { h: -0.02, s: 0.02, l: 0.05 };
 
 interface Part {
   mesh: THREE.InstancedMesh;
+  /** How many instances `mesh` was allocated for. */
+  capacity: number;
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
   /** Which kinds contribute an instance to this part. */
   kinds: readonly SceneryKind[];
   /** Local transform of this part relative to the item's base, before item scale/rotation. */
@@ -25,14 +29,16 @@ interface Part {
 /**
  * Trees, bushes and pebbles on empty ground.
  *
- * The plan (`scenery.ts`) is made once, at construction, for the whole grid. Only visibility
- * changes afterwards: {@link refresh} hides every item whose cell is no longer free, which is
- * how drawing a road or spawning a house clears the land under it. Every part is one
+ * The plan (`scenery.ts`) follows the map's forest, and is remade only when that changes
+ * ({@link setForest}) — once per game, and once per brush stroke in the designer. Otherwise
+ * only visibility changes: {@link refresh} hides every item whose cell is no longer free,
+ * which is how drawing a road or spawning a house clears the land under it. Every part is one
  * `InstancedMesh` sized for the whole plan, so a refresh rewrites matrices and never
- * allocates GPU buffers.
+ * allocates GPU buffers; a replan that outgrows a part reallocates it, with headroom.
  */
 export class SceneryLayer {
-  private readonly items: SceneryItem[];
+  private readonly seed: number;
+  private items: SceneryItem[];
   private readonly parts: Part[] = [];
   private readonly group = new THREE.Group();
   private readonly geometries: THREE.BufferGeometry[] = [];
@@ -40,10 +46,10 @@ export class SceneryLayer {
   private foliage = new THREE.Color(FOLIAGE_COLOR);
   private visible: SceneryItem[] = [];
 
+  /** Starts with no forest: bushes and pebbles only, until {@link setForest}. */
   constructor(scene: THREE.Scene, seed: number) {
-    this.items = planScenery(GRID_COLS, GRID_ROWS, TILE_SIZE, seed);
-    const capacity = (kinds: readonly SceneryKind[]): number =>
-      Math.max(1, this.items.filter(i => kinds.includes(i.kind)).length);
+    this.seed = seed;
+    this.items = planScenery(GRID_COLS, GRID_ROWS, TILE_SIZE, seed, () => false);
 
     const foliageMat = this.material(new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true }));
     const trunkMat = this.material(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }));
@@ -60,23 +66,13 @@ export class SceneryLayer {
 
     const trees = [SceneryKind.RoundTree, SceneryKind.Pine] as const;
     const add = (
-      geom: THREE.BufferGeometry, mat: THREE.Material, kinds: readonly SceneryKind[],
+      geometry: THREE.BufferGeometry, material: THREE.Material, kinds: readonly SceneryKind[],
       offsetY: number, color: Part['color'],
     ): void => {
-      const cap = capacity(kinds);
-      const mesh = new THREE.InstancedMesh(geom, mat, cap);
-      // Allocated up front, not left to the first `setColorAt`: whether a program reads
-      // instance colours is fixed when it compiles, and a part that starts with no visible
-      // items would otherwise compile without them and draw every later instance black.
-      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.count = 0;
-      // Instances span the whole map; the default bounding sphere is the geometry's own,
-      // which would cull every tree the moment the origin leaves the frustum.
-      mesh.frustumCulled = false;
+      const capacity = Math.max(1, this.countOf(kinds));
+      const mesh = createMesh(geometry, material, capacity);
       this.group.add(mesh);
-      this.parts.push({ mesh, kinds, offsetY, color });
+      this.parts.push({ mesh, capacity, geometry, material, kinds, offsetY, color });
     };
 
     add(trunkGeom, trunkMat, trees, 3, TRUNK_COLOR);
@@ -92,6 +88,28 @@ export class SceneryLayer {
 
   setFoliageColor(color: string): void {
     this.foliage.set(color);
+    this.writeInstances();
+  }
+
+  /**
+   * Replan for a new forest. Nothing shows until the next {@link refresh}, which the caller
+   * owes: the old visible set belongs to the old plan.
+   */
+  setForest(isForest: (gx: number, gy: number) => boolean): void {
+    this.items = planScenery(GRID_COLS, GRID_ROWS, TILE_SIZE, this.seed, isForest);
+    this.visible = [];
+    for (const part of this.parts) {
+      const needed = this.countOf(part.kinds);
+      if (needed <= part.capacity) continue;
+      // Doubling, so painting a forest out stroke by stroke reallocates a handful of times
+      // rather than on every stroke.
+      const capacity = Math.max(needed, part.capacity * 2);
+      this.group.remove(part.mesh);
+      part.mesh.dispose();
+      part.mesh = createMesh(part.geometry, part.material, capacity);
+      part.capacity = capacity;
+      this.group.add(part.mesh);
+    }
     this.writeInstances();
   }
 
@@ -149,6 +167,12 @@ export class SceneryLayer {
     }
   }
 
+  private countOf(kinds: readonly SceneryKind[]): number {
+    let n = 0;
+    for (const item of this.items) if (kinds.includes(item.kind)) n++;
+    return n;
+  }
+
   private geometry<T extends THREE.BufferGeometry>(g: T): T {
     this.geometries.push(g);
     return g;
@@ -158,6 +182,21 @@ export class SceneryLayer {
     this.materials.push(m);
     return m;
   }
+}
+
+function createMesh(geometry: THREE.BufferGeometry, material: THREE.Material, capacity: number): THREE.InstancedMesh {
+  const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+  // Allocated up front, not left to the first `setColorAt`: whether a program reads
+  // instance colours is fixed when it compiles, and a part that starts with no visible
+  // items would otherwise compile without them and draw every later instance black.
+  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.count = 0;
+  // Instances span the whole map; the default bounding sphere is the geometry's own,
+  // which would cull every tree the moment the origin leaves the frustum.
+  mesh.frustumCulled = false;
+  return mesh;
 }
 
 function clamp01(v: number): number {

@@ -50,6 +50,8 @@ const AMBIENT_FRAME_INTERVAL_MS = 30;
  * change after a quiet spell is drawn at once, and the last one of a burst is never lost.
  */
 const SHADOW_REFRESH_INTERVAL_MS = 100;
+/** Seed for the scenery plan; see its use in the constructor. */
+const SCENERY_SEED = 0x7ee5eed;
 
 export class Renderer {
   protected scene: THREE.Scene;
@@ -222,9 +224,10 @@ export class Renderer {
     this.roadDebugLayer = new RoadDebugLayer();
     this.carRouteLayer = new CarRouteLayer();
     this.highwayLayer = new HighwayLayer();
-    // A fresh layout per renderer, i.e. per game. The seed is a *decoration* seed: nothing
-    // about gameplay reads it, and it is not part of the map format.
-    this.sceneryLayer = new SceneryLayer(this.scene, Math.floor(Math.random() * 0x7fffffff));
+    // A constant *decoration* seed: nothing about gameplay reads it, and it is not part of
+    // the map format. Constant so that a map's forest looks the same in the designer, in play
+    // and on the landing page. Trees wait for `setForest`.
+    this.sceneryLayer = new SceneryLayer(this.scene, SCENERY_SEED);
     this.grid = grid;
     this.refreshScenery();
 
@@ -667,6 +670,16 @@ export class Renderer {
   ): void {
     this.backgroundTiles = tiles;
     this.paintPalette = palette;
+  }
+
+  /** Grow trees on exactly these cells — the map's painted forest — and nowhere else. */
+  setForest(cells: Iterable<GridPos>): void {
+    const forest = new Set<number>();
+    for (const c of cells) forest.add(c.gy * GRID_COLS + c.gx);
+    this.sceneryLayer.setForest((gx, gy) => forest.has(gy * GRID_COLS + gx));
+    this.refreshScenery();
+    // For the shadow map, which scenery casts into, and the frame.
+    this.markGroundDirty();
   }
 
   render(

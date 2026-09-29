@@ -19,6 +19,7 @@ const TOOLS: [DesignerTool, string, string][] = [
   [DesignerTool.GasStation, 'Gas', 'G'],
   [DesignerTool.Highway, 'Highway', 'W'],
   [DesignerTool.Paint, 'Paint', 'P'],
+  [DesignerTool.Forest, 'Forest', 'F'],
 ];
 
 const COLORS: [GameColor, string][] = [

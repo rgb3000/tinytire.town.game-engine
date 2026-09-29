@@ -119,6 +119,11 @@ const backgroundTileSchema = z.object({
   left: z.number().optional(),
 });
 
+const forestCellSchema = z.object({
+  gx: z.number(),
+  gy: z.number(),
+});
+
 const paintPaletteSchema = z
   .array(z.string())
   .length(5, 'paintPalette must be an array of exactly 5 hex strings');
@@ -163,6 +168,7 @@ export const mapFileSchema = z.object({
   highways: z.array(highwaySchema).optional(),
   backgroundTiles: z.array(backgroundTileSchema).optional(),
   paintPalette: paintPaletteSchema.optional(),
+  forests: z.array(forestCellSchema).optional(),
   colorTheme: colorThemeSchema.optional(),
   constants: constantsSchema.optional(),
 });

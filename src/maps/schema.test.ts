@@ -221,11 +221,16 @@ describe('whole-config round trip', () => {
       highways: [{ fromGx: 1, fromGy: 2, toGx: 3, toGy: 4, cp1X: 10, cp1Y: 20, cp2X: 30, cp2Y: 40 }],
       backgroundTiles: [{ gx: 0, gy: 1, left: 2 }],
       paintPalette: ['#a', '#b', '#c', '#d', '#e'],
+      forests: [{ gx: 12, gy: 3 }, { gx: 13, gy: 3 }],
       colorTheme: { background: '#ffaf00', waterColor: '#001122' },
       constants: { STARTING_ROADS: 50, DEMAND_RATE_GROWTH: 0.4 },
     };
 
     expect(roundTrip(config)).toEqual(config);
+  });
+
+  it('writes no forests key for an empty forest — absent and empty both mean no trees', () => {
+    expect(toMapFile({ ...baseConfig, forests: [] })).not.toHaveProperty('forests');
   });
 
   it('is idempotent — a second trip changes nothing', () => {

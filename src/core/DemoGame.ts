@@ -68,6 +68,7 @@ export class DemoGame {
         [...mapConfig.paintPalette],
       );
     }
+    if (mapConfig.forests) this.renderer.setForest(mapConfig.forests);
     this.renderer.resize(window.innerWidth, window.innerHeight);
 
     // Register cars when houses are spawned — must precede applyMapConfig.

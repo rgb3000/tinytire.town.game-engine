@@ -169,6 +169,15 @@ export interface BackgroundTileDefinition {
   left?: number;
 }
 
+/**
+ * One cell of painted forest. Trees grow only on these cells, and only while the cell is
+ * otherwise empty, so building on forest clears it. A map with no forest has no trees.
+ */
+export interface ForestCellDefinition {
+  gx: number;
+  gy: number;
+}
+
 export interface ColorTheme {
   background: string;
   groundPlate: string;
@@ -198,6 +207,7 @@ export interface MapConfig {
   highways?: HighwayDefinition[];
   paintPalette?: PaintPalette;
   backgroundTiles?: BackgroundTileDefinition[];
+  forests?: ForestCellDefinition[];
   colorTheme?: Partial<ColorTheme>;
   constants?: Partial<GameConstants>;
   designerMode?: boolean;

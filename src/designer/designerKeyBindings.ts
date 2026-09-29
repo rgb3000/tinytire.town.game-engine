@@ -63,6 +63,7 @@ export function designerKeyBindings(actions: DesignerInputActions): KeyBindingTa
       { keys: ['g', 'G'], run: () => actions.selectTool(DesignerTool.GasStation) },
       { keys: ['w', 'W'], run: () => actions.selectTool(DesignerTool.Highway) },
       { keys: ['p', 'P'], run: () => actions.selectTool(DesignerTool.Paint) },
+      { keys: ['f', 'F'], run: () => actions.selectTool(DesignerTool.Forest) },
       { keys: ['v', 'V'], run: () => actions.toggleIsometric() },
       {
         keys: COLOR_KEYS.map((_, i) => String(i + 1)),
