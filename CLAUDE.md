@@ -225,7 +225,18 @@ so the whole pipeline is exercised directly by the Node-only suite.
 ### Rendering (`src/rendering/`)
 
 Three.js with orthographic top-down camera. Layers: TerrainLayer, RoadLayer, BuildingLayer,
-CarLayer, HighwayLayer, SceneryLayer.
+CarLayer, HighwayLayer, SceneryLayer, TerrainDetailLayer.
+
+**Terrain detail** — the water surface, and pines/boulders on mountains and reeds/lily
+pads/rocks in lakes — lives in `TerrainDetailLayer`, apart from `ObstacleLayer` and
+`LakeLayer`, whose tests pin the landform geometry; it changes none of their vertices. The
+water is a translucent sheet just above the lake's top terrace, so the existing terraces read
+as the lakebed. Placement is `terrainDecor.ts`: pure, driven by the same signed distance field
+the terraces come from, and seeded by a constant so designer rebuilds do not reshuffle it.
+Every item stays inside the footprint, which the player cannot build on. The ripples are
+animated, so **a board with any lake redraws every frame**; the renderer's usual
+render-only-when-dirty skip does not apply to it. Snow caps are a material rule in
+`ObstacleLayer.rockColor`, from `SNOW_MIN_LEVELS` terraces up.
 
 **Scenery** (trees, bushes, pebbles) is decoration only. `scenery.ts` plans it once per
 renderer from a random seed — pure, Node-tested — and `SceneryLayer` only toggles visibility

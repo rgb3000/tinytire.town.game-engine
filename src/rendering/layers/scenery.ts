@@ -137,7 +137,7 @@ export function visibleScenery(
 }
 
 /** Smooth 2D value noise in [0, 1], on an integer lattice hashed from `seed`. */
-function valueNoise(seed: number): (x: number, y: number) => number {
+export function valueNoise(seed: number): (x: number, y: number) => number {
   const lattice = (ix: number, iy: number): number => {
     let h = Math.imul(ix, 0x27d4eb2d) ^ Math.imul(iy, 0x165667b1) ^ seed;
     h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);

@@ -5,6 +5,7 @@ import { MOUNTAIN_COLOR, GROUND_Y_POSITION } from '../../constants';
 import { lerp } from '../../utils/math';
 import { buildTerrainContours } from '../../terrain';
 import { buildTerraceMeshes, buildFlatRing } from './terrainMesh';
+import { SNOW_MIN_LEVELS } from './terrainDecor';
 
 const LAYER_HEIGHT = 12;
 
@@ -91,16 +92,38 @@ export class ObstacleLayer {
   }
 }
 
-/** Lighten toward the peak, as before: base blended up to 35% toward white. */
-function makeRockMaterial(baseColor: THREE.Color, index: number, count: number): THREE.MeshPhysicalMaterial {
+export const SNOW_COLOR = new THREE.Color(0xf6f7f4);
+export const MOSS_COLOR = new THREE.Color(0x7f9a5a);
+
+/** How far the foot terrace is blended toward moss, so a mountain grows out of the grass. */
+export const MOSS_MIX = 0.35;
+
+/** Alternate terraces are nudged this much lighter and darker, which reads as rock strata. */
+const STRATA = 0.05;
+
+/**
+ * Per-terrace rock colour: mossy at the foot, banded strata above, lightening toward the
+ * peak — base blended up to 35% toward white, as before — and snow on the top terrace of any
+ * mountain with at least `SNOW_MIN_LEVELS` terraces. Small hills stay earthy all the way up.
+ */
+export function rockColor(baseColor: THREE.Color, index: number, count: number): THREE.Color {
   const t = count > 1 ? index / (count - 1) : 0;
   const lighten = t * 0.35;
+  const color = new THREE.Color(
+    lerp(baseColor.r, 1, lighten),
+    lerp(baseColor.g, 1, lighten),
+    lerp(baseColor.b, 1, lighten),
+  );
+  if (index === 0 && count > 1) color.lerp(MOSS_COLOR, MOSS_MIX);
+  else color.offsetHSL(0, 0, index % 2 === 0 ? STRATA : -STRATA);
+
+  if (count >= SNOW_MIN_LEVELS && index === count - 1) color.copy(SNOW_COLOR);
+  return color;
+}
+
+function makeRockMaterial(baseColor: THREE.Color, index: number, count: number): THREE.MeshPhysicalMaterial {
   return new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(
-      lerp(baseColor.r, 1, lighten),
-      lerp(baseColor.g, 1, lighten),
-      lerp(baseColor.b, 1, lighten),
-    ),
+    color: rockColor(baseColor, index, count),
     roughness: 0.6,
     metalness: 0.0,
     sheen: 0.15,

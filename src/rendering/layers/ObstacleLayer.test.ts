@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { GROUND_Y_POSITION, TILE_SIZE, MOUNTAIN_COLOR } from '../../constants';
 import type { GridPos } from '../../types';
 import type { MountainTriangles } from '../../maps/types';
-import { ObstacleLayer } from './ObstacleLayer';
+import { ObstacleLayer, MOSS_COLOR, MOSS_MIX, SNOW_COLOR } from './ObstacleLayer';
+import { SNOW_MIN_LEVELS } from './terrainDecor';
 
 // Three.js geometry is pure maths — `Shape`, `ExtrudeGeometry`, `rotateX` and the whole
 // `src/terrain` pipeline run under plain Node. Only the *renderer* needs a GPU, and a
@@ -445,9 +446,10 @@ describe('ObstacleLayer', () => {
     it('defaults to the mountain colour, darkened for the shoreline', () => {
       layer.build(scene, block(4));
 
+      // The foot terrace is the mountain colour grown over with moss.
       const base = new THREE.Color(MOUNTAIN_COLOR);
       expect(materialsAt(GROUND_Y_POSITION + LAYER_HEIGHT)[0].color.getHex())
-        .toBe(base.getHex());
+        .toBe(base.clone().lerp(MOSS_COLOR, MOSS_MIX).getHex());
       expect(materialsAt(GROUND_Y_POSITION)[0].color.getHex())
         .toBe(base.clone().multiplyScalar(0.85).getHex());
     });
@@ -456,7 +458,7 @@ describe('ObstacleLayer', () => {
       layer.build(scene, block(4), '#204080', undefined, '#ff0000');
 
       expect(materialsAt(GROUND_Y_POSITION + LAYER_HEIGHT)[0].color.getHex())
-        .toBe(new THREE.Color('#204080').getHex());
+        .toBe(new THREE.Color('#204080').lerp(MOSS_COLOR, MOSS_MIX).getHex());
       expect(materialsAt(GROUND_Y_POSITION)[0].color.getHex())
         .toBe(new THREE.Color('#ff0000').getHex());
     });
@@ -468,19 +470,33 @@ describe('ObstacleLayer', () => {
         .toBe(new THREE.Color('#204080').clone().multiplyScalar(0.85).getHex());
     });
 
-    it('lightens each terrace toward the peak', () => {
-      layer.build(scene, block(6), '#000000');
-
+    /** Terrace colours, foot first, as built. */
+    function terraceColors(): THREE.Color[] {
       const levelYs = [...new Set(meshesOf(scene).map(worldY))]
         .filter(y => y > GROUND_Y_POSITION + 1e-6)
         .sort((a, b) => a - b);
-      expect(levelYs.length).toBeGreaterThan(2);
+      return levelYs.map(y => materialsAt(y)[0].color);
+    }
 
-      const reds = levelYs.map(y => materialsAt(y)[0].color.r);
-      expect(reds[0]).toBeCloseTo(0, 6);
-      // Black base blended up to 35% toward white, evenly across the stack.
-      expect(reds[reds.length - 1]).toBeCloseTo(0.35, 6);
-      for (let i = 1; i < reds.length; i++) expect(reds[i]).toBeGreaterThan(reds[i - 1]);
+    it('lightens toward the peak in alternating strata, under a snow cap', () => {
+      layer.build(scene, block(6), '#000000');
+      const colors = terraceColors();
+      expect(colors.length).toBeGreaterThanOrEqual(SNOW_MIN_LEVELS);
+
+      expect(colors[colors.length - 1].getHex()).toBe(SNOW_COLOR.getHex());
+      // Between the mossy foot and the snow, each terrace is lighter than the one two below
+      // it: the lightening ramp, read within one stratum so the banding cannot mask it.
+      const rock = colors.slice(1, -1).map(c => c.getHSL({ h: 0, s: 0, l: 0 }).l);
+      for (let i = 2; i < rock.length; i++) expect(rock[i]).toBeGreaterThan(rock[i - 2]);
+      // And adjacent terraces differ, which is the banding.
+      for (let i = 1; i < rock.length; i++) expect(rock[i]).not.toBeCloseTo(rock[i - 1], 3);
+    });
+
+    it('keeps hills too small for snow earthy to the top', () => {
+      layer.build(scene, block(2), '#000000');
+      const colors = terraceColors();
+      expect(colors.length).toBeLessThan(SNOW_MIN_LEVELS);
+      for (const c of colors) expect(c.getHex()).not.toBe(SNOW_COLOR.getHex());
     });
 
     it('does not mutate the shared default colour across builds', () => {

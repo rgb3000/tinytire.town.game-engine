@@ -19,6 +19,7 @@ import { CarRouteLayer } from './layers/CarRouteLayer';
 import type { TrafficAdapter } from '../systems/car/TrafficAdapter';
 import { HighwayLayer } from './layers/HighwayLayer';
 import { SceneryLayer } from './layers/SceneryLayer';
+import { TerrainDetailLayer } from './layers/TerrainDetailLayer';
 import { createBackdropPlane } from './backdrop';
 import {
   poseFor, stepPose, poseSettled, positionFor,
@@ -52,6 +53,7 @@ export class Renderer {
   private trafficAdapter: TrafficAdapter | null;
   private highwayLayer: HighwayLayer;
   private sceneryLayer: SceneryLayer;
+  private terrainDetailLayer = new TerrainDetailLayer();
   /** Cells a highway passes over, as `gy * GRID_COLS + gx`. Scenery is cleared under them. */
   private highwayCells = new Set<number>();
   private grid: Grid;
@@ -84,6 +86,7 @@ export class Renderer {
   private waterColor: string | undefined;
   private shorelineColor: string | undefined;
   private mountainShorelineColor: string | undefined;
+  private foliageColor: string | undefined;
 
   // Blueprint image (designer-only, not saved with map)
   private blueprintMesh: THREE.Mesh | null = null;
@@ -418,6 +421,9 @@ export class Renderer {
   rebuildTerrain(mountainCells: GridPos[], lakeCells: GridPos[], mountainTriangles?: MountainTriangles, lakeTriangles?: LakeTriangles): void {
     this.obstacleLayer.build(this.scene, mountainCells, this.mountainColor, mountainTriangles, this.mountainShorelineColor);
     this.lakeLayer.build(this.scene, lakeCells, lakeTriangles, this.waterColor, this.shorelineColor);
+    this.terrainDetailLayer.build(
+      this.scene, mountainCells, mountainTriangles, lakeCells, lakeTriangles, this.foliageColor, this.waterColor,
+    );
     this.lakeCells = lakeCells;
     this.lakeTris = lakeTriangles;
     this.markGroundDirty();
@@ -509,6 +515,7 @@ export class Renderer {
     this.waterColor = theme.waterColor;
     this.shorelineColor = theme.shorelineColor;
     this.mountainShorelineColor = theme.mountainShorelineColor;
+    this.foliageColor = theme.foliage;
     // Grid lines
     if (this.gridLines) {
       (this.gridLines.material as THREE.LineBasicMaterial).color.set(theme.gridLines);
@@ -705,6 +712,12 @@ export class Renderer {
     } else {
       this.carRouteLayer.clear(this.scene);
     }
+    // Water ripples are animated, so a board with a lake redraws every frame.
+    if (this.terrainDetailLayer.hasWater) {
+      this.terrainDetailLayer.tick(performance.now() / 1000);
+      this.needsRender = true;
+    }
+
     // Render only when something changed
     if (this.needsRender && !this.isCapturing) {
       this.webglRenderer.render(this.scene, this.camera);
@@ -801,6 +814,7 @@ export class Renderer {
     this.obstacleLayer.dispose(this.scene);
     this.lakeLayer.dispose(this.scene);
     this.sceneryLayer.dispose(this.scene);
+    this.terrainDetailLayer.dispose(this.scene);
     if (this.indicatorMesh) {
       this.scene.remove(this.indicatorMesh);
       this.indicatorMesh.geometry.dispose();
