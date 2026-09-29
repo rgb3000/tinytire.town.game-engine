@@ -95,7 +95,14 @@ function mount(): void {
     const map = selectedMap();
     if (map) designer.loadMapConfig(map);
     designer.start();
-    const unmountPanel = mountDesignPanel(designer, panel, mount);
+    // Reset wipes the board rather than reloading the map: a map's own forest, terrain and
+    // roads would all come straight back. The picker follows, so it never names a map the
+    // board no longer shows.
+    const unmountPanel = mountDesignPanel(designer, panel, () => {
+      mapId = BLANK;
+      picker.value = BLANK;
+      mount();
+    });
     teardown = () => {
       unmountPanel();
       designer.dispose();

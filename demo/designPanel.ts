@@ -131,7 +131,7 @@ export function mountDesignPanel(
     console.log(JSON.parse(designer.exportConfig()));
   });
 
-  const resetButton = el('button', { type: 'button', textContent: 'Reset', title: 'Reload this map' });
+  const resetButton = el('button', { type: 'button', textContent: 'Reset', title: 'Clear the board' });
   resetButton.addEventListener('click', onReset);
 
   const collapseButton = el('button', { type: 'button', textContent: '▾', title: 'Collapse panel' });
