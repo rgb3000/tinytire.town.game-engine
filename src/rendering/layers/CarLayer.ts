@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { type Car, CarState } from '../../entities/Car';
 import { COLOR_MAP, CAR_WIDTH, CAR_LENGTH, GROUND_Y_POSITION } from '../../constants';
 import type { GameColor } from '../../types';
@@ -13,6 +14,10 @@ import {
 const SHADOW_OFFSET = groundShadowOffset(CAR_SHADOW_HEIGHT);
 /** Just above the car's own base, so the patch lies on whatever surface the car is on. */
 const SHADOW_Y = 0.25;
+
+/** The cab sits in the front half of the truck, the bed in the rear half. */
+const CAB_OFFSET_X = CAR_LENGTH * 0.18;
+const BED_OFFSET_X = -CAR_LENGTH * 0.20;
 
 function roundedRectShape(w: number, h: number, r: number): THREE.Shape {
   const shape = new THREE.Shape();
@@ -29,6 +34,14 @@ function roundedRectShape(w: number, h: number, r: number): THREE.Shape {
   return shape;
 }
 
+/** The parts of one car's group that `update` reaches for after building it. */
+interface CarParts {
+  /** Meshes painted in the car's colour, which light up when the car is selected. */
+  body: THREE.Mesh[];
+  load: THREE.Mesh;
+  shadow: THREE.Mesh;
+}
+
 function lerpAngle(a: number, b: number, t: number): number {
   let diff = b - a;
   while (diff > Math.PI) diff -= 2 * Math.PI;
@@ -39,6 +52,8 @@ function lerpAngle(a: number, b: number, t: number): number {
 export class CarLayer {
   private meshes = new Map<string, THREE.Group>();
   private materialCache = new Map<GameColor, THREE.MeshStandardMaterial>();
+  private bedMaterialCache = new Map<GameColor, THREE.MeshStandardMaterial>();
+  private parts = new Map<string, CarParts>();
   private gameColors: Record<number, string> = { ...COLOR_MAP };
   private selectedCarId: string | null = null;
   private prevSelectedCarId: string | null = null;
@@ -55,6 +70,14 @@ export class CarLayer {
   private bumperMaterial: THREE.MeshStandardMaterial;
   private tireGeometry: THREE.CylinderGeometry;
   private tireMaterial: THREE.MeshStandardMaterial;
+  // Detailing: each pair is merged into one geometry so it costs one draw call, not two.
+  private roofMaterial: THREE.MeshStandardMaterial;
+  private glassGeometry: THREE.BufferGeometry;
+  private glassMaterial: THREE.MeshStandardMaterial;
+  private headlightGeometry: THREE.BufferGeometry;
+  private headlightMaterial: THREE.MeshStandardMaterial;
+  private taillightGeometry: THREE.BufferGeometry;
+  private taillightMaterial: THREE.MeshStandardMaterial;
   private shadowGeometry: THREE.PlaneGeometry;
   private shadowTexture: THREE.DataTexture;
   private shadowMaterial: THREE.MeshBasicMaterial;
@@ -97,6 +120,32 @@ export class CarLayer {
     this.tireGeometry.rotateX(Math.PI / 2);
     this.tireMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
 
+    // White cab roof, with glass in front of and behind it.
+    this.roofMaterial = new THREE.MeshStandardMaterial({ color: 0xF7F5EF, roughness: 0.4 });
+    const roofHalfLen = (cabLen * 0.85) / 2 + 0.3;
+    const pane = (x: number) => new THREE.BoxGeometry(0.7, 1.5, CAR_WIDTH * 0.7).translate(x, 2.75, 0);
+    const front = pane(CAB_OFFSET_X + roofHalfLen + 0.2);
+    const rear = pane(CAB_OFFSET_X - roofHalfLen - 0.2);
+    this.glassGeometry = mergeGeometries([front, rear]);
+    front.dispose();
+    rear.dispose();
+    this.glassMaterial = new THREE.MeshStandardMaterial({ color: 0x9CC6D6, roughness: 0.15, metalness: 0.3 });
+
+    const pair = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+      const a = new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+      const b = new THREE.BoxGeometry(w, h, d).translate(x, y, -z);
+      const merged = mergeGeometries([a, b]);
+      a.dispose();
+      b.dispose();
+      return merged;
+    };
+    const cabFront = CAB_OFFSET_X + cabLen / 2;
+    this.headlightGeometry = pair(0.5, 0.5, 1.0, cabFront - 0.1, 1.85, CAR_WIDTH * 0.32);
+    this.headlightMaterial = new THREE.MeshStandardMaterial({ color: 0xFFE08A, emissive: 0xFFE08A, emissiveIntensity: 0.6 });
+    const bedRear = BED_OFFSET_X - CAR_LENGTH * 0.24;
+    this.taillightGeometry = pair(0.5, 0.6, 0.9, bedRear - 0.2, 1.7, CAR_WIDTH * 0.36);
+    this.taillightMaterial = new THREE.MeshStandardMaterial({ color: 0xC0352B, emissive: 0xC0352B, emissiveIntensity: 0.3 });
+
     // Cars cast no shadow into the shadow map (see `carShadow.ts`); this patch stands in.
     this.shadowGeometry = new THREE.PlaneGeometry(CAR_LENGTH * CAR_SHADOW_LENGTH_SCALE, CAR_WIDTH * CAR_SHADOW_WIDTH_SCALE);
     this.shadowGeometry.rotateX(-Math.PI / 2);
@@ -128,6 +177,8 @@ export class CarLayer {
     // Clear material caches so they get recreated with new colors
     for (const [, mat] of this.materialCache) mat.dispose();
     this.materialCache.clear();
+    for (const [, mat] of this.bedMaterialCache) mat.dispose();
+    this.bedMaterialCache.clear();
     for (const [, mat] of this.loadMaterialCache) mat.dispose();
     this.loadMaterialCache.clear();
   }
@@ -135,8 +186,19 @@ export class CarLayer {
   private getMaterial(color: GameColor): THREE.MeshStandardMaterial {
     let mat = this.materialCache.get(color);
     if (!mat) {
-      mat = new THREE.MeshStandardMaterial({ color: this.gameColors[color] });
+      mat = new THREE.MeshStandardMaterial({ color: this.gameColors[color], roughness: 0.35, metalness: 0.1 });
       this.materialCache.set(color, mat);
+    }
+    return mat;
+  }
+
+  /** The inside of the bed: the car's colour a shade darker, so the bed reads as open. */
+  private getBedMaterial(color: GameColor): THREE.MeshStandardMaterial {
+    let mat = this.bedMaterialCache.get(color);
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
+      mat.color.set(this.gameColors[color]).multiplyScalar(0.72);
+      this.bedMaterialCache.set(color, mat);
     }
     return mat;
   }
@@ -161,15 +223,12 @@ export class CarLayer {
 
     // Reset highlight on previously-selected car when selection changes
     if (this.prevSelectedCarId && this.prevSelectedCarId !== this.selectedCarId) {
-      const prevGroup = this.meshes.get(this.prevSelectedCarId);
-      if (prevGroup) {
-        // Reset emissive on body materials (first 6 children are body meshes)
-        for (let i = 0; i < 6; i++) {
-          const mesh = prevGroup.children[i] as THREE.Mesh;
-          if (mesh?.material instanceof THREE.MeshStandardMaterial) {
-            mesh.material.emissive.setHex(0x000000);
-            mesh.material.emissiveIntensity = 0;
-          }
+      const prevParts = this.parts.get(this.prevSelectedCarId);
+      if (prevParts) {
+        for (const mesh of prevParts.body) {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          mat.emissive.setHex(0x000000);
+          mat.emissiveIntensity = 0;
         }
       }
     }
@@ -196,12 +255,13 @@ export class CarLayer {
       }
 
       let group = this.meshes.get(car.id);
-      if (!group) {
+      let parts = this.parts.get(car.id);
+      if (!group || !parts) {
         group = new THREE.Group();
         const mat = this.getMaterial(car.color);
 
-        const cabOffsetX = CAR_LENGTH * 0.18; // cab sits in front half
-        const bedOffsetX = -CAR_LENGTH * 0.20; // bed sits in rear half
+        const cabOffsetX = CAB_OFFSET_X;
+        const bedOffsetX = BED_OFFSET_X;
 
         // Cab base (front)
         const cabBase = new THREE.Mesh(this.cabBaseGeometry, mat);
@@ -209,12 +269,12 @@ export class CarLayer {
         group.add(cabBase);
 
         // Cab roof (narrower, on top of base)
-        const cabRoof = new THREE.Mesh(this.cabRoofGeometry, mat);
+        const cabRoof = new THREE.Mesh(this.cabRoofGeometry, this.roofMaterial);
         cabRoof.position.set(cabOffsetX, 1.8, 0);
         group.add(cabRoof);
 
         // Bed floor (rear, low)
-        const bedFloor = new THREE.Mesh(this.bedFloorGeometry, mat);
+        const bedFloor = new THREE.Mesh(this.bedFloorGeometry, this.getBedMaterial(car.color));
         bedFloor.position.x = bedOffsetX;
         group.add(bedFloor);
 
@@ -243,7 +303,7 @@ export class CarLayer {
         rearBumper.position.set(bedOffsetX - CAR_LENGTH * 0.26 - 0.2, 0.3, 0);
         group.add(rearBumper);
 
-        // Load (pin sphere in the bed, child index 8)
+        // Load (pin sphere in the bed)
         const load = new THREE.Mesh(this.loadGeometry, this.getLoadMaterial(car.color));
         load.position.set(bedOffsetX, 6, 0);
         load.visible = false;
@@ -264,20 +324,22 @@ export class CarLayer {
           group.add(tire);
         }
 
-        // Shadow patch (child index 13). Last, so the fixed indices above are unchanged.
+        group.add(new THREE.Mesh(this.glassGeometry, this.glassMaterial));
+        group.add(new THREE.Mesh(this.headlightGeometry, this.headlightMaterial));
+        group.add(new THREE.Mesh(this.taillightGeometry, this.taillightMaterial));
+
         const shadow = new THREE.Mesh(this.shadowGeometry, this.shadowMaterial);
         shadow.renderOrder = 1;
         group.add(shadow);
 
         scene.add(group);
         this.meshes.set(car.id, group);
+        parts = { body: [cabBase, leftWall, rightWall, rearWall], load, shadow };
+        this.parts.set(car.id, parts);
       }
 
       group.visible = true;
-
-      // Toggle load visibility based on car state (load is child index 8)
-      const load = group.children[8];
-      load.visible = car.hasLoad;
+      parts.load.visible = car.hasLoad;
 
       // Interpolate position
       const x = lerp(car.prevPixelPos.x, car.pixelPos.x, alpha);
@@ -310,7 +372,7 @@ export class CarLayer {
       // way the car faces — so it is turned back through the car's own heading.
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-      group.children[13].position.set(
+      parts.shadow.position.set(
         SHADOW_OFFSET.x * cos + SHADOW_OFFSET.z * sin,
         SHADOW_Y,
         -SHADOW_OFFSET.x * sin + SHADOW_OFFSET.z * cos,
@@ -319,13 +381,10 @@ export class CarLayer {
       // Highlight selected car
       const isSelected = car.id === this.selectedCarId;
       if (isSelected) {
-        // Emissive glow on body materials (first 6 children are body meshes)
-        for (let i = 0; i < 6; i++) {
-          const mesh = group.children[i] as THREE.Mesh;
-          if (mesh?.material instanceof THREE.MeshStandardMaterial) {
-            mesh.material.emissive.setHex(0xffffff);
-            mesh.material.emissiveIntensity = 0.4;
-          }
+        for (const mesh of parts.body) {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          mat.emissive.setHex(0xffffff);
+          mat.emissiveIntensity = 0.4;
         }
       }
 
@@ -345,6 +404,7 @@ export class CarLayer {
       if (!activeCars.has(id)) {
         scene.remove(group);
         this.meshes.delete(id);
+        this.parts.delete(id);
       }
     }
   }
@@ -354,6 +414,7 @@ export class CarLayer {
       scene.remove(group);
     }
     this.meshes.clear();
+    this.parts.clear();
     this.cabBaseGeometry.dispose();
     this.cabRoofGeometry.dispose();
     this.bedFloorGeometry.dispose();
@@ -368,6 +429,15 @@ export class CarLayer {
     this.loadMaterialCache.clear();
     this.tireGeometry.dispose();
     this.tireMaterial.dispose();
+    this.roofMaterial.dispose();
+    this.glassGeometry.dispose();
+    this.glassMaterial.dispose();
+    this.headlightGeometry.dispose();
+    this.headlightMaterial.dispose();
+    this.taillightGeometry.dispose();
+    this.taillightMaterial.dispose();
+    for (const [, mat] of this.bedMaterialCache) mat.dispose();
+    this.bedMaterialCache.clear();
     this.shadowGeometry.dispose();
     this.shadowTexture.dispose();
     this.shadowMaterial.dispose();
