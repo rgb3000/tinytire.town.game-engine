@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Business } from '../../../entities/Business';
 import { TILE_SIZE, COLOR_MAP, MAX_DEMAND_PINS, DEMAND_DEBUG, CELL_MARGIN, GROUND_PLATE_MARGIN } from '../../../constants';
 import { getBusinessLayout } from '../../../utils/businessLayout';
@@ -7,8 +8,22 @@ import {
   createPlateMat,
   addGroundPlate,
   disposeGroup,
+  extrudeFlat,
   PLATE_EXTRUDE_OPTIONS,
 } from './buildingRenderUtils';
+
+// The factory: a hall in the business's colour under a sawtooth roof, with a chimney.
+const HALL_SIZE = TILE_SIZE - CELL_MARGIN - 2 * GROUND_PLATE_MARGIN;
+const HALL_BEVEL = 1;
+const HALL_HEIGHT = 11;
+const SAW_TEETH = 3;
+const SAW_HEIGHT = 5;
+/** Horizontal run of each tooth's glazed face; the rest of the tooth is roof. */
+const SAW_GLASS_RUN = 2.6;
+const CHIMNEY_RADIUS = 2.2;
+const CHIMNEY_TOP = 27;
+/** Chimney centre, inset from the hall's outer corner. */
+const CHIMNEY_INSET = 4.5;
 
 export class BusinessLayer {
   private businessMeshes = new Map<string, THREE.Group>();
@@ -18,7 +33,16 @@ export class BusinessLayer {
   private debugCanvas: HTMLCanvasElement | null = null;
   private debugCtx: CanvasRenderingContext2D | null = null;
 
-  private bizBodyGeom: THREE.ExtrudeGeometry;
+  private hallGeom: THREE.ExtrudeGeometry;
+  private sawRoofGeom: THREE.BufferGeometry;
+  private sawGlassGeom: THREE.BufferGeometry;
+  private chimneyGeom: THREE.CylinderGeometry;
+  private chimneyBandGeom: THREE.CylinderGeometry;
+  private chimneyMouthGeom: THREE.CircleGeometry;
+  private glassMat: THREE.MeshStandardMaterial;
+  private chimneyMat: THREE.MeshStandardMaterial;
+  private chimneyBandMat: THREE.MeshStandardMaterial;
+  private chimneyMouthMat: THREE.MeshStandardMaterial;
   private bizPinGeom: THREE.SphereGeometry;
   private bizPinOutlineGeom: THREE.CircleGeometry;
   private connectorGeom: THREE.CircleGeometry;
@@ -34,14 +58,43 @@ export class BusinessLayer {
   private isDirty = false;
 
   constructor() {
-    // Business body geometry
-    const bizBodySize = TILE_SIZE - CELL_MARGIN - 2 * GROUND_PLATE_MARGIN;
-    const buildingHeight = 22;
-    const bevelThickness = 6.0;
-    const bevelSize = 5.0;
-    const bizBodyShape = roundedRectShape(bizBodySize - 2 * bevelSize, bizBodySize - 2 * bevelSize, 2);
-    this.bizBodyGeom = new THREE.ExtrudeGeometry(bizBodyShape, { depth: buildingHeight - 2 * bevelThickness, bevelEnabled: true, bevelThickness, bevelSize, bevelSegments: 16, curveSegments: 12 });
-    this.bizBodyGeom.rotateX(-Math.PI / 2);
+    // The bevel grows the outline outwards, so the shape is drawn that much smaller.
+    const hallInner = HALL_SIZE - 2 * HALL_BEVEL;
+    this.hallGeom = extrudeFlat(roundedRectShape(hallInner, hallInner, 2), HALL_HEIGHT, HALL_BEVEL);
+
+    // Sawtooth roof. Ridges run along x; each tooth's glazed face looks north (-z), away
+    // from the sun, and leans back enough to show as a strip of glass from straight above.
+    const roofParts: THREE.BufferGeometry[] = [];
+    const glassParts: THREE.BufferGeometry[] = [];
+    const toothRun = hallInner / SAW_TEETH;
+    for (let i = 0; i < SAW_TEETH; i++) {
+      const z0 = -hallInner / 2 + i * toothRun;
+      const zPeak = z0 + SAW_GLASS_RUN;
+      glassParts.push(sawPrism(hallInner, [[z0, 0], [zPeak, SAW_HEIGHT], [zPeak, 0]]));
+      roofParts.push(sawPrism(hallInner, [[zPeak, 0], [zPeak, SAW_HEIGHT], [z0 + toothRun, 0]]));
+    }
+    this.sawRoofGeom = mergeGeometries(roofParts);
+    this.sawGlassGeom = mergeGeometries(glassParts);
+    for (const g of [...roofParts, ...glassParts]) g.dispose();
+    this.sawRoofGeom.translate(0, HALL_HEIGHT, 0);
+    this.sawGlassGeom.translate(0, HALL_HEIGHT, 0);
+
+    this.chimneyGeom = new THREE.CylinderGeometry(CHIMNEY_RADIUS * 0.85, CHIMNEY_RADIUS, CHIMNEY_TOP, 16);
+    this.chimneyGeom.translate(0, CHIMNEY_TOP / 2, 0);
+    this.chimneyBandGeom = new THREE.CylinderGeometry(CHIMNEY_RADIUS * 0.95, CHIMNEY_RADIUS * 0.97, 2, 16);
+    this.chimneyBandGeom.translate(0, CHIMNEY_TOP - 3.5, 0);
+    this.chimneyMouthGeom = new THREE.CircleGeometry(CHIMNEY_RADIUS * 0.6, 16);
+    this.chimneyMouthGeom.rotateX(-Math.PI / 2);
+    this.chimneyMouthGeom.translate(0, CHIMNEY_TOP + 0.02, 0);
+
+    // The glazing faces away from the sun, so without a little light of its own it would
+    // read as grey slate rather than glass.
+    this.glassMat = new THREE.MeshStandardMaterial({
+      color: '#BFDCE6', roughness: 0.2, emissive: '#9CC6D6', emissiveIntensity: 0.45,
+    });
+    this.chimneyMat = new THREE.MeshStandardMaterial({ color: '#8A8780', roughness: 0.7 });
+    this.chimneyBandMat = new THREE.MeshStandardMaterial({ color: '#F7F5EF', roughness: 0.5 });
+    this.chimneyMouthMat = new THREE.MeshStandardMaterial({ color: '#3D3D3A', roughness: 1 });
 
     this.bizPinGeom = new THREE.SphereGeometry(4, 16, 12);
     this.bizPinOutlineGeom = new THREE.CircleGeometry(3, 16);
@@ -63,6 +116,10 @@ export class BusinessLayer {
     this.sharedResources.add(this.bizPinGeom);
     this.sharedResources.add(this.bizPinOutlineGeom);
     this.sharedResources.add(this.connectorGeom);
+    for (const r of [
+      this.hallGeom, this.sawRoofGeom, this.sawGlassGeom, this.chimneyGeom, this.chimneyBandGeom,
+      this.chimneyMouthGeom, this.glassMat, this.chimneyMat, this.chimneyBandMat, this.chimneyMouthMat,
+    ]) this.sharedResources.add(r);
   }
 
   setPlateColor(color: string): void {
@@ -223,11 +280,27 @@ export class BusinessLayer {
       rotation: biz.rotation,
     });
 
-    const body = new THREE.Mesh(this.bizBodyGeom.clone(), mat);
-    body.position.set(layout.building.centerX, 0, layout.building.centerZ);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    group.add(body);
+    const bx = layout.building.centerX;
+    const bz = layout.building.centerZ;
+    const addPart = (geom: THREE.BufferGeometry, partMat: THREE.Material, x: number, z: number) => {
+      const mesh = new THREE.Mesh(geom, partMat);
+      mesh.position.set(x, 0, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+    addPart(this.hallGeom, mat, bx, bz);
+    addPart(this.sawRoofGeom, mat, bx, bz);
+    addPart(this.sawGlassGeom, this.glassMat, bx, bz);
+
+    // The chimney stands at the hall's outer corner — the one facing away from the rest of
+    // the lot — so it never crowds the pins or the connector, whichever way the lot is turned.
+    const lot = layout.groundPlate;
+    const cx = bx + Math.sign(bx - lot.centerX) * (HALL_SIZE / 2 - CHIMNEY_INSET);
+    const cz = bz + Math.sign(bz - lot.centerZ) * (HALL_SIZE / 2 - CHIMNEY_INSET);
+    addPart(this.chimneyGeom, this.chimneyMat, cx, cz);
+    addPart(this.chimneyBandGeom, this.chimneyBandMat, cx, cz);
+    addPart(this.chimneyMouthGeom, this.chimneyMouthMat, cx, cz);
 
     addGroundPlate(group, layout.groundPlate, this.plateMat, this.plateGeomCache);
 
@@ -288,7 +361,10 @@ export class BusinessLayer {
     this.connectorMeshes.clear();
     this.debugSprites.clear();
 
-    this.bizBodyGeom.dispose();
+    for (const r of [
+      this.hallGeom, this.sawRoofGeom, this.sawGlassGeom, this.chimneyGeom, this.chimneyBandGeom,
+      this.chimneyMouthGeom, this.glassMat, this.chimneyMat, this.chimneyBandMat, this.chimneyMouthMat,
+    ]) r.dispose();
     this.connectorGeom.dispose();
     for (const geom of this.plateGeomCache.values()) geom.dispose();
     this.plateGeomCache.clear();
@@ -299,4 +375,16 @@ export class BusinessLayer {
     this.bizOutlineMat.dispose();
 
   }
+}
+
+/**
+ * A prism running the hall's full width along x, from a profile given as `[z, y]` points.
+ */
+function sawPrism(width: number, profile: [number, number][]): THREE.BufferGeometry {
+  // Drawn with shape x = -z, because turning the extrusion onto x turns shape x onto -z.
+  const shape = new THREE.Shape(profile.map(([z, y]) => new THREE.Vector2(-z, y)));
+  const geom = new THREE.ExtrudeGeometry(shape, { depth: width, bevelEnabled: false });
+  geom.rotateY(Math.PI / 2);
+  geom.translate(-width / 2, 0, 0);
+  return geom;
 }

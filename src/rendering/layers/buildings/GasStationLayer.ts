@@ -5,6 +5,7 @@ import {
   createPlateMat,
   addGroundPlate,
   disposeGroup,
+  extrudeFlat,
   PLATE_EXTRUDE_OPTIONS,
 } from './buildingRenderUtils';
 import { computeGroundPlate } from '../../../utils/buildingLayout';
@@ -193,21 +194,6 @@ function glossy(color: string): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color, metalness: 0.2, roughness: 0.15, emissive: color, emissiveIntensity: 0.15,
   });
-}
-
-/** Extrudes a ground-plan shape upwards from y = 0, with its outline lying in the x/z plane. */
-function extrudeFlat(shape: THREE.Shape, height: number, bevel: number): THREE.ExtrudeGeometry {
-  const geom = new THREE.ExtrudeGeometry(shape, {
-    depth: height - 2 * bevel,
-    bevelEnabled: bevel > 0,
-    bevelThickness: bevel,
-    bevelSize: bevel,
-    bevelSegments: 2,
-    curveSegments: 6,
-  });
-  geom.rotateX(-Math.PI / 2);
-  geom.translate(0, bevel, 0);
-  return geom;
 }
 
 /** A fuel drop, point towards the top of the screen, `size` px tall. */

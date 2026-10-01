@@ -15,6 +15,21 @@ export function roundedRectShape(w: number, h: number, r: number): THREE.Shape {
   return shape;
 }
 
+/** Extrudes a ground-plan shape upwards from y = 0, with its outline lying in the x/z plane. */
+export function extrudeFlat(shape: THREE.Shape, height: number, bevel: number): THREE.ExtrudeGeometry {
+  const geom = new THREE.ExtrudeGeometry(shape, {
+    depth: height - 2 * bevel,
+    bevelEnabled: bevel > 0,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 2,
+    curveSegments: 6,
+  });
+  geom.rotateX(-Math.PI / 2);
+  geom.translate(0, bevel, 0);
+  return geom;
+}
+
 export const PLATE_EXTRUDE_OPTIONS = {
   depth: 1.0,
   bevelEnabled: true,
