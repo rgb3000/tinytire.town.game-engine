@@ -11,18 +11,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Version comes from package.json's packageManager field.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
 
       # The demo is the only thing that exercises the rendering, input, and audio
       # layers, none of which the Node test suite can reach. Building it will not
       # catch a runtime fault, but it does catch an import that no longer resolves.
-      - run: npm run build:demo
+      - run: pnpm build:demo

@@ -6,8 +6,8 @@ report is a real contribution.
 ## Getting set up
 
 ```
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 That's the whole setup. The playground at `localhost:5173` runs the game and the map editor
@@ -16,9 +16,9 @@ against the local sources; there is no database, no API keys, and nothing to con
 ## Before opening a pull request
 
 ```
-npm run typecheck
-npm run lint
-npm test
+pnpm typecheck
+pnpm lint
+pnpm test
 ```
 
 CI runs exactly these three, plus a demo build. All four must pass.

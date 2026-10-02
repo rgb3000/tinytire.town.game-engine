@@ -14,11 +14,11 @@ website that consumes it lives in a separate, private repository and depends on 
 
 ## Commands
 
-- `npm run dev` — Vite dev server for the demo playground (the only way to actually run the game)
-- `npm test` — Vitest unit tests (Node, no DOM)
-- `npm run typecheck` — `tsc --noEmit`
-- `npm run lint` — oxlint
-- `npm run build:demo` — production build of the demo into `dist-demo/`
+- `pnpm dev` — Vite dev server for the demo playground (the only way to actually run the game)
+- `pnpm test` — Vitest unit tests (Node, no DOM)
+- `pnpm typecheck` — `tsc --noEmit`
+- `pnpm lint` — oxlint
+- `pnpm build:demo` — production build of the demo into `dist-demo/`
 
 ## The public API boundary
 

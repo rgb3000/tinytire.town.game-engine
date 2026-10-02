@@ -8,7 +8,7 @@ This repository is the engine and its map editor. The website that wraps it — 
 saved maps, the community browser — lives elsewhere and consumes this package.
 
 ```
-npm install && npm run dev
+pnpm install && pnpm dev
 ```
 
 That opens the playground: pick a built-in map, play it, switch to design mode, build
